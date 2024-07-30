@@ -26,11 +26,11 @@ cpdef void read_into_numpy_f32(parquet_path, FileMetaData metadata, cnp.ndarray[
     cdef bool cpre_buffer = pre_buffer
 
     # Ensure the input is a 2D array
-    assert np_array.ndim == 2
+    assert np_array.ndim == 2, f"Unexpected np_array.ndim, {np_array.ndim} != 2"
 
     # Ensure the row and column indices are within the array bounds
-    assert ccolumn_indices.size() == np_array.shape[1]
-    assert np_array.strides[0] == 4 #f32 size
+    assert ccolumn_indices.size() == np_array.shape[1], f"Requested to read {ccolumn_indices.size()} columns , but the number of columns in numpy array is {np_array.shape[1]}"
+    assert np_array.strides[0] == 4, f"Unexpected np_array.strides[0], {np_array.strides[0]} != 4"
 
     with nogil:
         cjollyjack.ReadColumnsF32(encoded_path.c_str(), metadata.sp_metadata, np_array.data, cstride_size, crow_group_idx, ccolumn_indices, cpre_buffer)
