@@ -6,12 +6,12 @@ import concurrent.futures
 import time
 import os
 
-row_groups = 1
+row_groups = 2
 n_columns = 5_000
 chunk_size = 32_000
 n_rows = row_groups * chunk_size
 
-n_threads = 6
+n_threads = 2
 work_items = n_threads
 
 all_columns = list(range(n_columns))
@@ -47,10 +47,8 @@ def worker_arrow_row_group():
 
     table = pr.read_row_groups(range(row_groups), use_threads=False)
     table = table
-    combined_array = np.column_stack([c.to_numpy() for c in table.columns])
-    combined_array = combined_array
     global arrow_numpy
-    arrow_numpy = combined_array
+    arrow_numpy = table.to_pandas().to_numpy()
 
 def worker_arrow_record_batch():
     
@@ -59,7 +57,7 @@ def worker_arrow_record_batch():
     batches = pq_file.iter_batches(batch_size, use_threads=False, use_pandas_metadata=True) # batches will be a generator    
 
     for batch in batches:
-        combined_array = np.column_stack([c.to_numpy() for c in batch.columns])
+        combined_array = batch.to_pandas().to_numpy()
         combined_array = combined_array
 
 def worker_jollyjack_row_group():
