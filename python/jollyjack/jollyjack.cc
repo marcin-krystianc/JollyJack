@@ -40,9 +40,9 @@ void ReadIntoMemory (const char *parquet_path
   int64_t target_row = 0;
   for (int row_group : row_groups)
   {
-    auto row_group_reader = parquet_reader->RowGroup(row_group);
-    auto row_group_metadata = file_metadata->RowGroup(row_group);
-    auto num_rows = row_group_metadata->num_rows();
+    const auto row_group_reader = parquet_reader->RowGroup(row_group);
+    const auto row_group_metadata = file_metadata->RowGroup(row_group);
+    const auto num_rows = row_group_metadata->num_rows();
 
 #ifdef DEBUG
     std::cerr
@@ -95,8 +95,15 @@ void ReadIntoMemory (const char *parquet_path
             throw std::logic_error(msg);
           }
 
+          int64_t rows_to_read = num_rows;
           auto typed_reader = static_cast<parquet::DoubleReader *>(column_reader.get());
-          auto read_levels = typed_reader->ReadBatch(num_rows, nullptr, nullptr, (double *)&base_ptr[target_offset], &values_read);
+          while (rows_to_read > 0)
+          {
+            int64_t tmp_values_read = 0;
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (double *)&base_ptr[target_offset + values_read * stride0_size], &tmp_values_read);
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
           break;
         }
 
@@ -108,8 +115,15 @@ void ReadIntoMemory (const char *parquet_path
             throw std::logic_error(msg);
           }
 
+          int64_t rows_to_read = num_rows;
           auto typed_reader = static_cast<parquet::FloatReader *>(column_reader.get());
-          auto read_levels = typed_reader->ReadBatch(num_rows, nullptr, nullptr, (float *)&base_ptr[target_offset], &values_read);
+          while (rows_to_read > 0)
+          {
+            int64_t tmp_values_read = 0;
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (float *)&base_ptr[target_offset + values_read * stride0_size], &tmp_values_read);
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
           break;
         }
 
@@ -122,24 +136,36 @@ void ReadIntoMemory (const char *parquet_path
             throw std::logic_error(msg);
           }
 
-          parquet::FixedLenByteArray flba;
+          const size_t warp_size = 1024;
+          parquet::FixedLenByteArray flba [warp_size];
+          int64_t rows_to_read = num_rows;
           auto typed_reader = static_cast<parquet::FixedLenByteArrayReader *>(column_reader.get());
-          values_read = 0;
-          for (size_t i=0; i<num_rows; i++)
+
+          while (rows_to_read > 0)
           {
-            int64_t tmp_values_read = 0;
-            auto read_levels = typed_reader->ReadBatch(1, nullptr, nullptr, &flba, &tmp_values_read);
-            memcpy(&base_ptr[target_offset + values_read * stride0_size], flba.ptr, stride0_size);
-            values_read += tmp_values_read;
-            if (tmp_values_read != 1)
-              break;
+              int64_t tmp_values_read = 0;
+              auto read_levels = typed_reader->ReadBatch(warp_size, nullptr, nullptr, flba, &tmp_values_read);
+              if (tmp_values_read > 0)
+              {
+                if (flba[tmp_values_read - 1].ptr - flba[0].ptr != (tmp_values_read - 1) * stride0_size)
+                {
+                  // TODO(marcink)  We could copy each FLB pointed value one by one instead of throwing an exception.
+                  //                However, at the time of this implementation, non-contiguous memory is impossible, so that exception is not expected to occur anyway.
+                  auto msg = std::string("Unexpected situation, FLBA memory is not contiguous for olumn:" + std::to_string(parquet_column) + " !");
+                  throw std::logic_error(msg);
+                }
+
+                memcpy(&base_ptr[target_offset + values_read * stride0_size], flba[0].ptr, tmp_values_read * stride0_size);
+                values_read += tmp_values_read;
+                rows_to_read -= tmp_values_read;
+              }
           }
 
           break;
         }
 
         default:
-        {          
+        {
           auto msg = std::string("Column " + std::to_string(parquet_column) + " has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");
           throw std::logic_error(msg);
         }
