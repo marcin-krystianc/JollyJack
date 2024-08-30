@@ -3,7 +3,8 @@
 ## Features
 
 - Reading parquet files directly into numpy arrays and torch tensors (fp16, fp32, fp64)
-- Compatibility with PalletJack
+- Faster and requires less memory than vanilla pyarrow
+- Compatibility with [PalletJack](https://github.com/marcin-krystianc/PalletJack)
 
 ## Known limitations
 
@@ -83,6 +84,7 @@ with fs.LocalFileSystem().open_input_file(path) as f:
                         , column_indices = range(pr.metadata.num_columns)
                         , pre_buffer = True
                         , use_threads = True)
+```
 
 ### Generating a torch tensor to read into:
 ```
@@ -106,3 +108,32 @@ jj.read_into_torch (source = path
 
 print(tensor)
 ```
+
+## Benchmarks:
+
+| n_threads | use_threads | pre_buffer | dtype     | compression | ParquetReader.read_row_groups | JollyJack.read_into_numpy |
+|-----------|-------------|------------|-----------|-------------|--------------------|--------------------|
+| 1         | False       | False      | float     | None        | **6.79s**          | **3.55s**          |
+| 1         | True        | False      | float     | None        | **5.17s**          | **2.32s**          |
+| 1         | False       | True       | float     | None        | **5.54s**          | **2.76s**          |
+| 1         | True        | True       | float     | None        | **3.98s**          | **2.66s**          |
+| 2         | False       | False      | float     | None        | **4.63s**          | **2.33s**          |
+| 2         | True        | False      | float     | None        | **3.89s**          | **2.36s**          |
+| 2         | False       | True       | float     | None        | **4.19s**          | **2.61s**          |
+| 2         | True        | True       | float     | None        | **3.36s**          | **2.39s**          |
+| 1         | False       | False      | float     | snappy      | **7.00s**          | **3.56s**          |
+| 1         | True        | False      | float     | snappy      | **5.21s**          | **2.23s**          |
+| 1         | False       | True       | float     | snappy      | **5.22s**          | **3.30s**          |
+| 1         | True        | True       | float     | snappy      | **3.73s**          | **2.84s**          |
+| 2         | False       | False      | float     | snappy      | **4.43s**          | **2.49s**          |
+| 2         | True        | False      | float     | snappy      | **3.40s**          | **2.42s**          |
+| 2         | False       | True       | float     | snappy      | **4.07s**          | **2.63s**          |
+| 2         | True        | True       | float     | snappy      | **3.14s**          | **2.55s**          |
+| 1         | False       | False      | halffloat | None        | **7.21s**          | **1.23s**          |
+| 1         | True        | False      | halffloat | None        | **3.53s**          | **0.71s**          |
+| 1         | False       | True       | halffloat | None        | **7.43s**          | **1.96s**          |
+| 1         | True        | True       | halffloat | None        | **4.04s**          | **1.52s**          |
+| 2         | False       | False      | halffloat | None        | **3.84s**          | **0.64s**          |
+| 2         | True        | False      | halffloat | None        | **3.11s**          | **0.57s**          |
+| 2         | False       | True       | halffloat | None        | **4.07s**          | **1.17s**          |
+| 2         | True        | True       | halffloat | None        | **3.39s**          | **1.14s**          |
