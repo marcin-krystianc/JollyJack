@@ -3,7 +3,7 @@
 ## Features
 
 - Reading parquet files directly into numpy arrays and torch tensors (fp16, fp32, fp64)
-- Faster and requires less memory than vanilla pyarrow
+- Faster and requiring less memory than vanilla PyArrow
 - Compatibility with [PalletJack](https://github.com/marcin-krystianc/PalletJack)
 
 ## Known limitations
