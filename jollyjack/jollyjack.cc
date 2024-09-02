@@ -1,21 +1,11 @@
-#include "arrow/api.h"
-#include "arrow/io/api.h"
-#include "arrow/result.h"
-#include "arrow/util/logging.h"
-#include "arrow/util/type_fwd.h"
-#include "arrow/util/thread_pool.h"
+
+#include "arrow/status.h"
 #include "arrow/util/parallel.h"
-#include "parquet/arrow/reader.h"
-#include "parquet/arrow/writer.h"
-#include "parquet/arrow/schema.h"
 #include "parquet/column_reader.h"
 
 #include "jollyjack.h"
 
 #include <iostream>
-#include <fstream>
-#include <chrono>
-#include <memory>
 
 using arrow::Status;
 
@@ -31,8 +21,8 @@ arrow::Status ReadColumn (int target_column
     )
 {
   const auto num_rows = row_group_metadata->num_rows();
-  auto parquet_column = column_indices[target_column];
-  auto column_reader = row_group_reader->Column(parquet_column);
+  const auto parquet_column = column_indices[target_column];
+  const auto column_reader = row_group_reader->Column(parquet_column);
 
 #ifdef DEBUG
       std::cerr
@@ -48,7 +38,7 @@ arrow::Status ReadColumn (int target_column
   size_t target_offset = stride0_size * target_row + stride1_size * target_column;
   size_t required_size = target_offset + num_rows * stride0_size;
 
-  if (buffer_size < target_offset + num_rows * stride0_size)
+  if (buffer_size < required_size)
   {
       auto msg = std::string("Buffer overrun protection:")          
         + " buffer_size:" + std::to_string(buffer_size) + " required size:" + std::to_string(required_size) 
@@ -59,7 +49,7 @@ arrow::Status ReadColumn (int target_column
   }
 
   try
-  {  
+  {
     switch (column_reader->descr()->physical_type())
     {
       case parquet::Type::DOUBLE:
@@ -111,7 +101,7 @@ arrow::Status ReadColumn (int target_column
           throw std::logic_error(msg);
         }
 
-        const size_t warp_size = 1024;
+        const int64_t warp_size = 1024;
         parquet::FixedLenByteArray flba [warp_size];
         int64_t rows_to_read = num_rows;
         auto typed_reader = static_cast<parquet::FixedLenByteArrayReader *>(column_reader.get());
@@ -119,14 +109,14 @@ arrow::Status ReadColumn (int target_column
         while (rows_to_read > 0)
         {
             int64_t tmp_values_read = 0;
-            auto read_levels = typed_reader->ReadBatch(warp_size, nullptr, nullptr, flba, &tmp_values_read);
+            auto read_levels = typed_reader->ReadBatch(std::min(warp_size, rows_to_read), nullptr, nullptr, flba, &tmp_values_read);
             if (tmp_values_read > 0)
             {
               if (flba[tmp_values_read - 1].ptr - flba[0].ptr != (tmp_values_read - 1) * stride0_size)
               {
                 // TODO(marcink)  We could copy each FLB pointed value one by one instead of throwing an exception.
                 //                However, at the time of this implementation, non-contiguous memory is impossible, so that exception is not expected to occur anyway.
-                auto msg = std::string("Unexpected situation, FLBA memory is not contiguous for olumn:" + std::to_string(parquet_column) + " !");
+                auto msg = std::string("Unexpected, FLBA memory is not contiguous when reading olumn:" + std::to_string(parquet_column) + " !");
                 throw std::logic_error(msg);
               }
 
@@ -176,7 +166,7 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
     , const std::vector<int> &column_indices
     , const std::vector<std::string> &column_names
     , bool pre_buffer
-    , bool use_threads    
+    , bool use_threads
     , int64_t expected_rows)
 {
   arrow::io::RandomAccessFile *random_access_file = nullptr;
@@ -244,14 +234,14 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
                 , buffer_size
                 , stride0_size
                 , stride1_size
-                , columns); 
+                , columns);
               });
     
     target_row += num_rows;
   }
 
   if (target_row != expected_rows)
- {
+  {
     auto msg = std::string("Expected to read ") + std::to_string(expected_rows) + " rows, but read only " + std::to_string(target_row) + "!";
     throw std::logic_error(msg);
   }
