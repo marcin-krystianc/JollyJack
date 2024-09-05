@@ -416,5 +416,71 @@ class TestJollyJack(unittest.TestCase):
 
             self.assertTrue(f"Expected to read {n_rows + 1} rows, but read only {n_rows}!" in str(context.exception), context.exception)
 
+    def test_read_numpy_column_names_mapping(self):
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdirname:
+            path = os.path.join(tmpdirname, "my.parquet")
+            table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = pa.float32())
+            pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=True, store_schema=False, write_page_index=True)
+
+            # Create an empty array
+            np_array = np.zeros((n_rows, n_columns), dtype=pa.float32().to_pandas_dtype(), order='F')
+            jj.read_into_numpy (source = path
+                                , metadata = None
+                                , np_array = np_array
+                                , row_group_indices = range(n_row_groups)
+                                , column_names = {f'column_{i}':n_columns - i - 1 for i in range(n_columns)}
+                                )
+        
+            pr = pq.ParquetReader()
+            pr.open(path)
+            expected_data = pr.read_all().to_pandas().to_numpy()
+            reversed_expected_data = expected_data[:, ::-1]
+            self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
+            
+            np_array = np.zeros((n_rows, n_columns), dtype=pa.float32().to_pandas_dtype(), order='F')
+            for c in range(n_columns):
+                jj.read_into_numpy (source = path
+                                    , metadata = None
+                                    , np_array = np_array
+                                    , row_group_indices = range(n_row_groups)
+                                    , column_names = {f'column_{c}':n_columns - c - 1}
+                                    )
+
+            self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
+
+    def test_read_numpy_column_indices_mapping(self):
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdirname:
+            path = os.path.join(tmpdirname, "my.parquet")
+            table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = pa.float32())
+            pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=True, store_schema=False, write_page_index=True)
+
+            # Create an empty array
+            np_array = np.zeros((n_rows, n_columns), dtype=pa.float32().to_pandas_dtype(), order='F')
+            jj.read_into_numpy (source = path
+                                , metadata = None
+                                , np_array = np_array
+                                , row_group_indices = range(n_row_groups)
+                                , column_indices = {i:n_columns - i - 1 for i in range(n_columns)}
+                                )
+
+            pr = pq.ParquetReader()
+            pr.open(path)
+            expected_data = pr.read_all().to_pandas().to_numpy()
+            reversed_expected_data = expected_data[:, ::-1]
+            self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
+             
+            np_array = np.zeros((n_rows, n_columns), dtype=pa.float32().to_pandas_dtype(), order='F')
+            for c in range(n_columns):
+                jj.read_into_numpy (source = path
+                                    , metadata = None
+                                    , np_array = np_array
+                                    , row_group_indices = range(n_row_groups)
+                                    , column_indices = {c : n_columns - c - 1}
+                                    )
+
+            self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
+
 if __name__ == '__main__':
     unittest.main()

@@ -32,19 +32,9 @@ cpdef void read_into_torch (object source, FileMetaData metadata, tensor, row_gr
     return
 
 cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np_array, row_group_indices, column_indices = [], column_names = [], pre_buffer=False, use_threads = False, use_memory_map = False):
-    """
-    Read parquet data directly into numpy array
-
-    Parameters
-    ----------
-    source : str, pathlib.Path, pyarrow.NativeFile, or file-like object
-    use_memory_map : bool, default False
-    metadata : FileMetaData, optional
-    pre_buffer : bool, default False
-    """
 
     cdef vector[int] crow_group_indices = row_group_indices
-    cdef vector[int] ccolumn_indices = column_indices
+    cdef vector[int] ccolumn_indices = column_indices.keys() if isinstance(column_indices, dict) else column_indices
     cdef uint32_t cstride0_size = np_array.strides[0]
     cdef uint32_t cstride1_size = np_array.strides[1]
     cdef void* cdata = np_array.data
@@ -56,12 +46,24 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
     if metadata is not None:
         c_metadata = metadata.sp_metadata
 
-    # Ensure the input is a 2D array
+    target_column_indices = []
+    if column_indices and isinstance(column_indices, dict):
+        target_column_indices = column_indices.values()
+    elif column_indices:
+        assert len(column_indices) == np_array.shape[1], f"Requested to read {len(column_indices)} columns, but the number of columns in numpy array is {np_array.shape[1]}"
+       
+    if isinstance(column_names, dict):
+        target_column_indices = column_names.values()
+    elif column_names:
+        assert len(column_names) == np_array.shape[1], f"Requested to read {len(column_names)} columns, but the number of columns in numpy array is {np_array.shape[1]}"
+
+    cdef vector[int] ctarget_column_indices = target_column_indices
+
+    # Ensure that only one input is set
+    assert (column_indices or column_names) and (not column_indices or not column_names), f"Either column_indices or column_names needs to be set"
+
+    # Ensure the input is a 2D array, Fortran-styl
     assert np_array.ndim == 2, f"Unexpected np_array.ndim, {np_array.ndim} != 2"
-
-    # Ensure the row and column indices are within the array bounds
-
-    assert max(ccolumn_indices.size(), ccolumn_names.size()) == np_array.shape[1], f"Requested to read {ccolumn_indices.size()} columns, but the number of columns in numpy array is {np_array.shape[1]}"
     assert np_array.strides[0] <= np_array.strides[1], f"Expected array in a Fortran-style (column-major) order"
 
     cdef int64_t cexpected_rows = np_array.shape[0]
@@ -75,9 +77,10 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
             , cbuffer_size
             , cstride0_size
             , cstride1_size
-            , crow_group_indices
             , ccolumn_indices
+            , crow_group_indices
             , ccolumn_names
+            , ctarget_column_indices
             , cpre_buffer
             , cuse_threads
             , cexpected_rows)
