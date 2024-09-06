@@ -67,7 +67,8 @@ class TestJollyJack(unittest.TestCase):
                                 , column_indices = range(pr.metadata.num_columns))
 
             self.assertTrue(np.array_equal(np_array2, expected_data))
-                
+            pr.close()
+
     def test_read_with_palletjack(self):
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = os.path.join(tmpdirname, "my.parquet")
@@ -100,6 +101,7 @@ class TestJollyJack(unittest.TestCase):
             pr.open(path)
             expected_data = pr.read_all()
             self.assertTrue(np.array_equal(np_array, expected_data))
+            pr.close()
 
     def test_read_nonzero_column_offset(self):
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -122,6 +124,7 @@ class TestJollyJack(unittest.TestCase):
             pr.open(path)
             expected_data = pr.read_all(column_indices = range(offset, offset + cols))
             self.assertTrue(np.array_equal(np_array, expected_data))
+            pr.close()
 
     def test_read_unsupported_column_types(self):
          with tempfile.TemporaryDirectory() as tmpdirname:
@@ -140,7 +143,7 @@ class TestJollyJack(unittest.TestCase):
                                     , column_indices = range(n_columns))
 
             self.assertTrue(f"Column 0 has unsupported data type: 0!" in str(context.exception), context.exception)
-
+                        
     def test_read_dtype_numpy(self):
         
         for pre_buffer in [False, True]:
@@ -182,6 +185,7 @@ class TestJollyJack(unittest.TestCase):
                                 pr.open(path)
                                 expected_data = pr.read_all().to_pandas().to_numpy()
                                 self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
+                                pr.close()
 
     def test_read_dtype_torch(self):
         
@@ -242,6 +246,7 @@ class TestJollyJack(unittest.TestCase):
                             pr.open(path)
                             expected_data = pr.read_all().to_pandas().to_numpy()
                             self.assertTrue(np.array_equal(tensor.numpy(), expected_data), f"{tensor.numpy()}\n{expected_data}")
+                            pr.close()
 
     def test_read_numpy_column_names(self):
 
@@ -264,6 +269,7 @@ class TestJollyJack(unittest.TestCase):
             pr.open(path)
             expected_data = pr.read_all().to_pandas().to_numpy()
             self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
+            pr.close()
 
     def test_read_torch_column_names(self):
 
@@ -295,6 +301,7 @@ class TestJollyJack(unittest.TestCase):
             pr.open(path)
             expected_data = pr.read_all().to_pandas().to_numpy()
             self.assertTrue(np.array_equal(tensor.numpy(), expected_data), f"{tensor.numpy()}\n{expected_data}")
+            pr.close()
 
     def test_read_invalid_column(self):
 
@@ -328,6 +335,7 @@ class TestJollyJack(unittest.TestCase):
                                     )
 
             self.assertTrue(f"Trying to read column index {n_columns} but row group metadata has only {n_columns} columns" in str(context.exception), context.exception)
+            pr.close()
 
     def test_read_filesystem(self):
 
@@ -351,6 +359,7 @@ class TestJollyJack(unittest.TestCase):
             pr.open(path)
             expected_data = pr.read_all().to_pandas().to_numpy()
             self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
+            pr.close()
 
     def test_read_invalid_row_group(self):
 
@@ -448,7 +457,8 @@ class TestJollyJack(unittest.TestCase):
                                     )
 
             self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
-
+            pr.close()
+            
     def test_read_numpy_column_indices_mapping(self):
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -481,7 +491,8 @@ class TestJollyJack(unittest.TestCase):
                                     )
 
             self.assertTrue(np.array_equal(np_array, reversed_expected_data), f"\n{np_array}\n\n{reversed_expected_data}")
-
+            pr.close()
+            
     def test_read_large_array(self):
 
         n_row_groups = 1
@@ -517,6 +528,7 @@ class TestJollyJack(unittest.TestCase):
 
             self.assertTrue(np.min(np_array) == 0)
             self.assertTrue(np.max(np_array) == n_rows)
+            pr.close()
 
 if __name__ == '__main__':
     unittest.main()
