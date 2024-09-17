@@ -24,6 +24,8 @@ arrow::Status ReadColumn (int column_index
   const auto num_rows = row_group_metadata->num_rows();
   const auto parquet_column = column_indices[column_index];
   const auto column_reader = row_group_reader->Column(parquet_column);
+  const auto column_name = column_reader->descr()->name();
+
   int target_column = column_index;
   if (target_column_indices.size() > 0)
     target_column = target_column_indices[column_index];
@@ -61,7 +63,7 @@ arrow::Status ReadColumn (int column_index
       {
         if (stride0_size != 8)
         {
-          auto msg = std::string("Column " + std::to_string(parquet_column) + " has DOUBLE data type, but the target value size is " + std::to_string(stride0_size) + "!");
+          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has DOUBLE data type, but the target value size is " + std::to_string(stride0_size) + "!");
           throw std::logic_error(msg);
         }
 
@@ -81,7 +83,7 @@ arrow::Status ReadColumn (int column_index
       {
         if (stride0_size != 4)
         {
-          auto msg = std::string("Column " + std::to_string(parquet_column) + " has FLOAT data type, but the target value size is " + std::to_string(stride0_size) + "!");
+          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FLOAT data type, but the target value size is " + std::to_string(stride0_size) + "!");
           throw std::logic_error(msg);
         }
 
@@ -101,7 +103,7 @@ arrow::Status ReadColumn (int column_index
       {
         if (stride0_size != column_reader->descr()->type_length())
         {
-          auto msg = std::string("Column " + std::to_string(parquet_column) + " has FIXED_LEN_BYTE_ARRAY data type with size " + std::to_string(column_reader->descr()->type_length()) + 
+          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FIXED_LEN_BYTE_ARRAY data type with size " + std::to_string(column_reader->descr()->type_length()) + 
             ", but the target value size is " + std::to_string(stride0_size) + "!");
           throw std::logic_error(msg);
         }
@@ -136,7 +138,7 @@ arrow::Status ReadColumn (int column_index
 
       default:
       {
-        auto msg = std::string("Column " + std::to_string(parquet_column) + " has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");
+        auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");
         throw std::logic_error(msg);
       }
     }
@@ -145,7 +147,7 @@ arrow::Status ReadColumn (int column_index
   {
     if (e.what() == std::string("Unexpected end of stream"))
     {
-      auto msg = std::string(e.what() + std::string(". Column ") + std::to_string(parquet_column) + " contains null values?");
+      auto msg = std::string(e.what() + std::string(". Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') contains null values?"));
       throw std::logic_error(msg);
     }
 
@@ -154,7 +156,7 @@ arrow::Status ReadColumn (int column_index
   
   if (values_read != num_rows)
   {
-    auto msg = std::string("Expected to read ") + std::to_string(num_rows) + " values, but read only " + std::to_string(values_read) + "!";
+    auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "'): Expected to read ") + std::to_string(num_rows) + " values, but read only " + std::to_string(values_read) + "!";
     throw std::logic_error(msg);
   }
 
