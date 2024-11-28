@@ -61,11 +61,11 @@ def worker_jollyjack_numpy(use_threads, pre_buffer, dtype):
                            , pre_buffer = pre_buffer
                            , use_threads = use_threads)
 
-def worker_jollyjack_transpose_shuffle(dtype):
+def worker_jollyjack_copy_to_row_major(dtype):
 
     np_array = np.zeros((chunk_size, n_columns_to_read), dtype=dtype, order='F')
-    dst_array = np.zeros((n_columns_to_read, chunk_size), dtype=dtype, order='C')
-    row_indicies = list(range(n_columns_to_read))
+    dst_array = np.zeros((chunk_size, n_columns_to_read), dtype=dtype, order='C')
+    row_indicies = list(range(chunk_size))
     random.shuffle(row_indicies)
 
     for f in range(n_files):
@@ -81,13 +81,11 @@ def worker_jollyjack_transpose_shuffle(dtype):
                            , pre_buffer = True
                            , use_threads = False)
 
-        jj.transpose_shuffle(np_array, dst_array, row_indicies)
+        jj.copy_to_numpy_row_major(np_array, dst_array, row_indicies)
 
-def worker_transpose_numpy(dtype):
+def worker_numpy_copy_to_row_major(dtype):
 
     np_array = np.zeros((chunk_size, n_columns_to_read), dtype=dtype, order='F')
-    row_indicies = list(range(n_columns_to_read))
-    random.shuffle(row_indicies)
 
     for f in range(n_files):
         pr = pq.ParquetReader()
@@ -102,7 +100,8 @@ def worker_transpose_numpy(dtype):
                            , pre_buffer = True
                            , use_threads = False)
 
-        dst_array = np.copy(np_array.T)
+        expected_array = np.zeros((chunk_size, n_columns_to_read), dtype=dtype, order='C')
+        np.copyto(expected_array, np_array)        
 
 def worker_jollyjack_torch(pre_buffer, dtype):
 
@@ -201,11 +200,11 @@ for compression, dtype in [(None, pa.float32()), ('snappy', pa.float32()), (None
             print(f"`JollyJack.read_into_torch` n_threads:{n_threads}, pre_buffer:{pre_buffer}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_jollyjack_torch(pre_buffer, dtype.to_pandas_dtype())):.2f} seconds")
 
     print(f".")
-    for jj_variant in [1, 2]:
-        os.environ["JJ_TRANSPOSE_SHUFFLE"] = str(jj_variant)
+    for jj_variant in [1, 2, 3, 4]:
+        os.environ["JJ_copy_to_row_major"] = str(jj_variant)
         for n_threads in [1, 2]:
-            print(f"`JollyJack.transpose_shuffle` n_threads:{n_threads}, dtype:{dtype}, compression={compression}, jj_variant={jj_variant} duration:{measure_reading(n_threads, lambda:worker_jollyjack_transpose_shuffle(dtype.to_pandas_dtype())):.2f} seconds")
+            print(f"`JollyJack.copy_to_numpy_row_major` n_threads:{n_threads}, dtype:{dtype}, compression={compression}, jj_variant={jj_variant} duration:{measure_reading(n_threads, lambda:worker_jollyjack_copy_to_row_major(dtype.to_pandas_dtype())):.2f} seconds")
 
     print(f".")
     for n_threads in [1, 2]:
-        print(f"`numpy.transpose().copy()` n_threads:{n_threads}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_transpose_numpy(dtype.to_pandas_dtype())):.2f} seconds")
+        print(f"`numpy.copy_to_row_major` n_threads:{n_threads}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_numpy_copy_to_row_major(dtype.to_pandas_dtype())):.2f} seconds")
