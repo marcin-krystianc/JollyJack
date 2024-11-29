@@ -723,7 +723,9 @@ class TestJollyJack(unittest.TestCase):
 
     def test_copy_to_torch_row_major(self):
 
-        for (n_rows, n_columns) in [(5,6), (1, 1), (100, 200), ]:
+        for (n_rows, n_columns) in [(1, 1), (1, 2), (2, 1), (5,6), (4, 4)
+                                    , (8, 8), (16, 16), (32, 32), (32, 33), (33, 32)
+                                    , (64, 64), (65, 64), (64, 65), (100, 200), (10000, 20000),]:
             for dtype in [pa.float16(), pa.float32(), pa.float64()]:
                 with self.subTest((n_rows, n_columns, dtype)):
 
