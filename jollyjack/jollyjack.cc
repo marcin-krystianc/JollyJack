@@ -1,4 +1,3 @@
-
 #include "arrow/status.h"
 #include "arrow/util/parallel.h"
 #include "parquet/column_reader.h"
@@ -24,6 +23,8 @@ arrow::Status ReadColumn (int column_index
     , size_t stride1_size
     , const std::vector<int> &column_indices
     , const std::vector<int> &target_column_indices
+    , const std::vector<int64_t> &target_row_ranges
+    , size_t target_row_ranges_idx
     ) noexcept
 {
   std::string column_name;
@@ -51,112 +52,144 @@ arrow::Status ReadColumn (int column_index
 
     int64_t values_read = 0;
     char *base_ptr = (char *)buffer;
-    size_t target_offset = stride0_size * target_row + stride1_size * target_column;
-    size_t required_size = target_offset + num_rows * stride0_size;
-
-    if (target_offset >= buffer_size)
-    {        
-        auto msg = std::string("Buffer overrun error:")          
-          + " Attempted to read " + std::to_string(num_rows) + " rows into location [" + std::to_string(target_row)
-          + ", " + std::to_string(target_column) + "], but that is beyond target's boundaries.";
-
-        return arrow::Status::UnknownError(msg);
-    }
-
-    if (required_size > buffer_size)
+    
+    int64_t rows_to_read = num_rows;
+    while (true)
     {
-        auto left_space = (buffer_size - target_offset) / stride0_size;
-        auto msg = std::string("Buffer overrun error:")          
-          + " Attempted to read " + std::to_string(num_rows) + " rows into location [" + std::to_string(target_row)
-          + ", " + std::to_string(target_column) + "], but there was space available for only " + std::to_string(left_space) + " rows.";
-
-        return arrow::Status::UnknownError(msg);
-    }
-
-    switch (column_reader->descr()->physical_type())
-    {
-      case parquet::Type::DOUBLE:
+      if (target_row_ranges.size() > 0)
       {
-        if (stride0_size != 8)
+        if (target_row_ranges_idx + 1 >= target_row_ranges.size())
         {
-          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has DOUBLE data type, but the target value size is " + std::to_string(stride0_size) + "!");
+          auto msg = std::string("Requested to read ") + std::to_string(rows_to_read + values_read) + " rows"
+              + ", but the current row group has " + std::to_string(num_rows) + " rows.";
+
           return arrow::Status::UnknownError(msg);
         }
 
-        int64_t rows_to_read = num_rows;
-        auto typed_reader = static_cast<parquet::DoubleReader *>(column_reader.get());
-        while (rows_to_read > 0)
+        target_row = target_row_ranges[target_row_ranges_idx];
+        rows_to_read = target_row_ranges[target_row_ranges_idx + 1] - target_row;
+
+        if (rows_to_read + values_read > num_rows)
         {
-          int64_t tmp_values_read = 0;
-          auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (double *)&base_ptr[target_offset + values_read * stride0_size], &tmp_values_read);
-          values_read += tmp_values_read;
-          rows_to_read -= tmp_values_read;
+            auto msg = std::string("Requested to read ") + std::to_string(rows_to_read + values_read) + " rows"
+              + ", but the current row group has only " + std::to_string(num_rows) + " rows.";
+
+            return arrow::Status::UnknownError(msg);
         }
-        break;
       }
 
-      case parquet::Type::FLOAT:
-      {
-        if (stride0_size != 4)
-        {
-          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FLOAT data type, but the target value size is " + std::to_string(stride0_size) + "!");
-          return arrow::Status::UnknownError(msg);
-        }
+      size_t target_offset = stride0_size * target_row + stride1_size * target_column;
+      size_t required_size = target_offset + rows_to_read * stride0_size;
 
-        int64_t rows_to_read = num_rows;
-        auto typed_reader = static_cast<parquet::FloatReader *>(column_reader.get());
-        while (rows_to_read > 0)
-        {
-          int64_t tmp_values_read = 0;
-          auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (float *)&base_ptr[target_offset + values_read * stride0_size], &tmp_values_read);
-          values_read += tmp_values_read;
-          rows_to_read -= tmp_values_read;
-        }
-        break;
+      if (target_offset >= buffer_size)
+      {        
+          auto msg = std::string("Buffer overrun error:")          
+            + " Attempted to read " + std::to_string(num_rows) + " rows into location [" + std::to_string(target_row)
+            + ", " + std::to_string(target_column) + "], but that is beyond target's boundaries.";
+
+          return arrow::Status::UnknownError(msg);
       }
 
-      case parquet::Type::FIXED_LEN_BYTE_ARRAY:
+      if (required_size > buffer_size)
       {
-        if (stride0_size != column_reader->descr()->type_length())
-        {
-          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FIXED_LEN_BYTE_ARRAY data type with size " + std::to_string(column_reader->descr()->type_length()) + 
-            ", but the target value size is " + std::to_string(stride0_size) + "!");
+          auto left_space = (buffer_size - target_offset) / stride0_size;
+          auto msg = std::string("Buffer overrun error:")          
+            + " Attempted to read " + std::to_string(num_rows) + " rows into location [" + std::to_string(target_row)
+            + ", " + std::to_string(target_column) + "], but there was space available for only " + std::to_string(left_space) + " rows.";
+
           return arrow::Status::UnknownError(msg);
-        }
+      }
 
-        const int64_t warp_size = 1024;
-        parquet::FixedLenByteArray flba [warp_size];
-        int64_t rows_to_read = num_rows;
-        auto typed_reader = static_cast<parquet::FixedLenByteArrayReader *>(column_reader.get());
-
-        while (rows_to_read > 0)
+      switch (column_reader->descr()->physical_type())
+      {
+        case parquet::Type::DOUBLE:
         {
+          if (stride0_size != 8)
+          {
+            auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has DOUBLE data type, but the target value size is " + std::to_string(stride0_size) + "!");
+            return arrow::Status::UnknownError(msg);
+          }
+
+          auto typed_reader = static_cast<parquet::DoubleReader *>(column_reader.get());
+          while (rows_to_read > 0)
+          {
             int64_t tmp_values_read = 0;
-            auto read_levels = typed_reader->ReadBatch(std::min(warp_size, rows_to_read), nullptr, nullptr, flba, &tmp_values_read);
-            if (tmp_values_read > 0)
-            {
-              if (flba[tmp_values_read - 1].ptr - flba[0].ptr != (tmp_values_read - 1) * stride0_size)
-              {
-                // TODO(marcink)  We could copy each FLB pointed value one by one instead of throwing an exception.
-                //                However, at the time of this implementation, non-contiguous memory is impossible, so that exception is not expected to occur anyway.
-                auto msg = std::string("Unexpected, FLBA memory is not contiguous when reading olumn:" + std::to_string(parquet_column) + " !");
-                return arrow::Status::UnknownError(msg);
-              }
-
-              memcpy(&base_ptr[target_offset + values_read * stride0_size], flba[0].ptr, tmp_values_read * stride0_size);
-              values_read += tmp_values_read;
-              rows_to_read -= tmp_values_read;
-            }
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (double *)&base_ptr[target_offset], &tmp_values_read);
+            target_offset += tmp_values_read * stride0_size;
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
+          break;
         }
 
-        break;
-      }
+        case parquet::Type::FLOAT:
+        {
+          if (stride0_size != 4)
+          {
+            auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FLOAT data type, but the target value size is " + std::to_string(stride0_size) + "!");
+            return arrow::Status::UnknownError(msg);
+          }
 
-      default:
-      {
-        auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");
-        return arrow::Status::UnknownError(msg);
-      }
+          auto typed_reader = static_cast<parquet::FloatReader *>(column_reader.get());
+          while (rows_to_read > 0)
+          {
+            int64_t tmp_values_read = 0;
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (float *)&base_ptr[target_offset], &tmp_values_read);
+            target_offset += tmp_values_read * stride0_size;
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
+          break;
+        }
+
+        case parquet::Type::FIXED_LEN_BYTE_ARRAY:
+        {
+          if (stride0_size != column_reader->descr()->type_length())
+          {
+            auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FIXED_LEN_BYTE_ARRAY data type with size " + std::to_string(column_reader->descr()->type_length()) + 
+              ", but the target value size is " + std::to_string(stride0_size) + "!");
+            return arrow::Status::UnknownError(msg);
+          }
+
+          const int64_t warp_size = 1024;
+          parquet::FixedLenByteArray flba [warp_size];
+          auto typed_reader = static_cast<parquet::FixedLenByteArrayReader *>(column_reader.get());
+
+          while (rows_to_read > 0)
+          {
+              int64_t tmp_values_read = 0;
+              auto read_levels = typed_reader->ReadBatch(std::min(warp_size, rows_to_read), nullptr, nullptr, flba, &tmp_values_read);
+              if (tmp_values_read > 0)
+              {
+                if (flba[tmp_values_read - 1].ptr - flba[0].ptr != (tmp_values_read - 1) * stride0_size)
+                {
+                  // TODO(marcink)  We could copy each FLB pointed value one by one instead of throwing an exception.
+                  //                However, at the time of this implementation, non-contiguous memory is impossible, so that exception is not expected to occur anyway.
+                  auto msg = std::string("Unexpected, FLBA memory is not contiguous when reading olumn:" + std::to_string(parquet_column) + " !");
+                  return arrow::Status::UnknownError(msg);
+                }
+
+                memcpy(&base_ptr[target_offset], flba[0].ptr, tmp_values_read * stride0_size);
+                target_offset += tmp_values_read * stride0_size;
+                values_read += tmp_values_read;
+                rows_to_read -= tmp_values_read;
+              }
+          }
+
+          break;
+        }
+
+        default:
+        {
+          auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");
+          return arrow::Status::UnknownError(msg);
+        }
+      }      
+
+      if (values_read == num_rows)
+        break;
+
+      target_row_ranges_idx += 2;
     }
 
     if (values_read != num_rows)
@@ -187,12 +220,18 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
     , size_t stride1_size
     , std::vector<int> column_indices
     , const std::vector<int> &row_groups
+    , const std::vector<int64_t> &target_row_ranges
     , const std::vector<std::string> &column_names
     , const std::vector<int> &target_column_indices
     , bool pre_buffer
     , bool use_threads
     , int64_t expected_rows)
 {
+  if (target_row_ranges.size() % 2 != 0)
+  {
+    throw std::logic_error("target_row_ranges must contain pairs of [start, end) indices");
+  }
+
   arrow::io::RandomAccessFile *random_access_file = nullptr;
   parquet::ReaderProperties reader_properties = parquet::default_reader_properties();
   auto arrowReaderProperties = parquet::default_arrow_reader_properties();
@@ -224,6 +263,7 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
   }
 
   int64_t target_row = 0;
+  size_t target_row_ranges_idx = 0;
   for (int row_group : row_groups)
   {
     const auto row_group_reader = parquet_reader->RowGroup(row_group);
@@ -258,7 +298,9 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
                 , stride0_size
                 , stride1_size
                 , column_indices
-                , target_column_indices);
+                , target_column_indices
+                , target_row_ranges
+                , target_row_ranges_idx);
               });
     if (result != arrow::Status::OK())
     {
@@ -266,15 +308,38 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
     }
 
     target_row += num_rows;
+    if (target_row_ranges.size() > 0)
+    {
+      auto rows = num_rows;
+      while (true)
+      {
+        auto range_rows = target_row_ranges[target_row_ranges_idx + 1] - target_row_ranges[target_row_ranges_idx];
+        target_row_ranges_idx += 2;
+        if (rows == range_rows)
+          break;
+
+        rows -= range_rows;
+      }
+    }
   }
 
-  if (target_row != expected_rows)
-  {
-    auto msg = std::string("Expected to read ") + std::to_string(expected_rows) + " rows, but read only " + std::to_string(target_row) + "!";
-    throw std::logic_error(msg);
-  }
+    if (target_row_ranges.size() > 0)
+    {
+      if (target_row_ranges_idx != target_row_ranges.size())
+      {
+        auto msg = std::string("Expected to read ") + std::to_string(target_row_ranges.size() / 2) + " row ranges, but read only " + std::to_string(target_row_ranges_idx / 2) + "!";
+        throw std::logic_error(msg);
+      }
+    }
+    else
+    {
+      if (target_row != expected_rows)
+      {
+        auto msg = std::string("Expected to read ") + std::to_string(expected_rows) + " rows, but read only " + std::to_string(target_row) + "!";
+        throw std::logic_error(msg);
+      }
+    }
 }
-
 
 void CopyToRowMajor (void* src_buffer, size_t src_stride0_size, size_t src_stride1_size, int src_rows, int src_cols,
     void* dst_buffer, size_t dst_stride0_size, size_t dst_stride1_size,

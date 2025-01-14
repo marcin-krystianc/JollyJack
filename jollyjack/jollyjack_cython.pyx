@@ -18,7 +18,7 @@ from collections.abc import Iterable
 def is_iterable_of_iterables(obj):
     return isinstance(obj, Iterable) and isinstance(obj[0], Iterable) and not isinstance(obj[0], str)
 
-cpdef void read_into_torch (object source, FileMetaData metadata, tensor, row_group_indices, column_indices = [], column_names = [], pre_buffer = False, use_threads = True, use_memory_map = False):
+cpdef void read_into_torch (object source, FileMetaData metadata, tensor, row_group_indices, row_ranges = [], column_indices = [], column_names = [], pre_buffer = False, use_threads = True, use_memory_map = False):
 
     import torch
 
@@ -26,6 +26,7 @@ cpdef void read_into_torch (object source, FileMetaData metadata, tensor, row_gr
         , metadata = metadata
         , np_array = tensor.numpy()
         , row_group_indices = row_group_indices
+        , row_ranges = row_ranges
         , column_indices = column_indices
         , column_names = column_names
         , pre_buffer = pre_buffer
@@ -35,7 +36,7 @@ cpdef void read_into_torch (object source, FileMetaData metadata, tensor, row_gr
 
     return
 
-cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np_array, row_group_indices, column_indices = [], column_names = [], pre_buffer = False, use_threads = True, use_memory_map = False):
+cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np_array, row_group_indices, row_ranges = [], column_indices = [], column_names = [], pre_buffer = False, use_threads = True, use_memory_map = False):
 
     cdef vector[int] crow_group_indices = row_group_indices
     cdef vector[int] ccolumn_indices
@@ -48,6 +49,7 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
     cdef uint64_t cbuffer_size = (np_array.shape[0]) * cstride0_size + (np_array.shape[1] - 1) * cstride1_size
     cdef shared_ptr[CFileMetaData] c_metadata
     cdef vector[int] ctarget_column_indices
+    cdef vector[int64_t] ctarget_row_ranges
 
     if metadata is not None:
         c_metadata = metadata.sp_metadata
@@ -72,6 +74,16 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
         assert len(column_names) == np_array.shape[1], f"Requested to read {len(column_names)} columns, but the number of columns in numpy array is {np_array.shape[1]}"
         ccolumn_names = [c.encode('utf8') for c in column_names]
 
+    if row_ranges:
+        for sl in row_ranges:
+            if sl.start is None or sl.stop is None or sl.start < 0 or sl.stop < 0 or sl.stop <= sl.start:
+                raise ValueError(f"Row range '{sl}' is not a valid range")
+
+            if sl.step is not None and sl.step != 1:
+                raise ValueError(f"Row range '{sl}' is not contiguous")
+
+        ctarget_row_ranges = [x for sl in row_ranges for x in (sl.start, sl.stop)]
+
     # Ensure that only one input is set
     assert (column_indices or column_names) and (not column_indices or not column_names), f"Either column_indices or column_names needs to be set"
 
@@ -92,6 +104,7 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
             , cstride1_size
             , ccolumn_indices
             , crow_group_indices
+            , ctarget_row_ranges
             , ccolumn_names
             , ctarget_column_indices
             , cpre_buffer

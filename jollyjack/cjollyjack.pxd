@@ -13,6 +13,7 @@ cdef extern from "jollyjack.h":
         , size_t stride1_size
         , vector[int] column_indices
         , const vector[int] &row_groups
+        , const vector[int64_t] &target_row_ranges
         , const vector[string] &column_names
         , const vector[int] &target_column_indices
         , bool pre_buffer
