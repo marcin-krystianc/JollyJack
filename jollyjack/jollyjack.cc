@@ -1,6 +1,7 @@
 #include "arrow/status.h"
 #include "arrow/util/parallel.h"
 #include "parquet/column_reader.h"
+#include "parquet/types.h"
 
 #include "jollyjack.h"
 
@@ -30,7 +31,7 @@ arrow::Status ReadColumn (int column_index
   std::string column_name;
   const auto num_rows = row_group_metadata->num_rows();
   const auto parquet_column = column_indices[column_index];
-  
+
   try
   {
     const auto column_reader = row_group_reader->Column(parquet_column);
@@ -39,6 +40,36 @@ arrow::Status ReadColumn (int column_index
     int target_column = column_index;
     if (target_column_indices.size() > 0)
       target_column = target_column_indices[column_index];
+
+    const auto column_chunk_metadata = row_group_metadata->ColumnChunk(parquet_column);
+    for (const auto encoding : column_chunk_metadata->encodings())
+    {
+      const char *unsupported_encoding = nullptr;
+
+      // Dictionary encoding is not supported for float16 values because FLBA pointers point to non-contiguous memory.
+      // Additionally, dictionary encoding prevents proper null value detection across all data types, so we disable it entirely.
+      if (encoding == parquet::Encoding::RLE_DICTIONARY)
+      {
+        unsupported_encoding = "RLE_DICTIONARY";
+      }
+
+      if (encoding == parquet::Encoding::PLAIN_DICTIONARY)
+      {
+        unsupported_encoding = "PLAIN_DICTIONARY";
+      }
+
+      // DELTA_BYTE_ARRAY encoding is not supported for float16 values because FLBA pointers reference non-contiguous memory.
+      if (encoding == parquet::Encoding::DELTA_BYTE_ARRAY)
+      {
+        unsupported_encoding = "DELTA_BYTE_ARRAY";
+      }
+
+      if (unsupported_encoding)
+      {
+        auto msg = std::string("Cannot read column=") + std::to_string(parquet_column) + " due to unsupported_encoding=" + unsupported_encoding + "!";
+        return arrow::Status::UnknownError(msg);
+      }
+    }
 
     #ifdef DEBUG
         std::cerr
