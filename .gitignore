@@ -1,6 +1,7 @@
 *.parquet
 *.parquet.index
 /jollyjack/jollyjack_cython.cpp
+/jollyjack/package_metadata.py
 /*.egg-info
 /dist
 /build
