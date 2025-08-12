@@ -26,7 +26,7 @@ if os.getenv('DEBUG', '') == 'ON':
 
 # Define your extension
 extensions = [
-    Extension( "jollyjack.jollyjack_cython", ["jollyjack/jollyjack_cython.pyx", "jollyjack/jollyjack.cc"],
+    Extension( "jollyjack.jollyjack_cython", ["jollyjack/jollyjack_cython.pyx", "jollyjack/jollyjack.cc", "jollyjack/io_uring_reader.cc"],
         include_dirs = include_dirs,  
         library_dirs = library_dirs,
         libraries=["arrow", "parquet"], 
