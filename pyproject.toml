@@ -51,7 +51,7 @@ manylinux-aarch64-image = "manylinux_2_28"
 
 ########################### cibuildwheel Linux #####################
 [tool.cibuildwheel.linux]
-archs = [auto, aarch64]
+archs = ["auto", "aarch64",]
 
 repair-wheel-command = [
  "auditwheel repair --exclude libarrow.so.2100 --exclude libparquet.so.2100 -w {dest_dir} {wheel}",
