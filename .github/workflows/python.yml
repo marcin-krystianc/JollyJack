@@ -17,14 +17,14 @@ permissions:
 jobs:
         
   test:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id
+    if: github.event_name == 'schedule' || github.event_name == 'push' || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.12"
         
     - name: Install dependencies
       shell: bash
@@ -46,13 +46,12 @@ jobs:
         pip install --editable .
         pytest
 
-  build:
-    needs: test
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id
-    runs-on: ${{ matrix.os }}
+  build-wheels:
+    if: github.event_name == 'schedule' || github.event_name == 'push' || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        runner: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
 
     steps:
@@ -64,10 +63,10 @@ jobs:
       with:
         platforms: all
 
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.12"
         
     - name: Install dependencies
       shell: bash
@@ -83,37 +82,27 @@ jobs:
         
     - name: Build wheels
       run: python3 -m cibuildwheel --output-dir dist
-      # to supply options, put them in 'env', like:
       env:
-        CIBW_REPAIR_WHEEL_COMMAND_LINUX: auditwheel repair --exclude libarrow.so.2100 --exclude libparquet.so.2100 -w {dest_dir} {wheel}
         CIBW_BUILD_VERBOSITY: 1
-        # We use manylinux_2_28 for ABI compatibility with pyarrow
-        # With the default image we were getting "undefined symbol: _ZNK5arrow6Status8ToStringEv" error (e.g https://github.com/ray-project/ray/issues/24566) 
-        CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-        CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-        CIBW_ARCHS_LINUX: auto aarch64
-        # Disable unsupported builds
-        CIBW_SKIP: "pp* *_i686 *-musllinux_* *win32 cp313-*"
 
     - uses: actions/upload-artifact@v4
       with:
-        name: dist-${{ matrix.os }}
+        name: dist-${{ matrix.runner }}
         path: ./dist/*
 
   test-binary:
-    needs: build
+    needs: build-wheels
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        runner: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
-
-    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v5
-    - name: Set up Python 3.10
+    - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.12"
 
     - name: Download artifacts
       uses: actions/download-artifact@v5
@@ -136,6 +125,35 @@ jobs:
         python3 -m pip install JollyJack --pre --find-links ./dist --break-system-packages --only-binary=:all: --force-reinstall --no-index --no-deps
         python3 test/test_jollyjack.py
 
+  test-binary-manylinux:
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["cp39-cp39", "cp310-cp310", "cp311-cp311", "cp312-cp312", "cp313-cp313"]
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+  
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+  
+      - name: Build and Run Docker Container for Tests
+        run: |
+          # Build the Docker image with Python version as build arg
+          docker build \
+            --build-arg PYTHON_VERSION=${{ matrix.python-version }} \
+            -t jollyjack-test-py${{ matrix.python-version }} \
+            --progress plain \
+            -f Dockerfile.test .
+          docker run jollyjack-test-py${{ matrix.python-version }}
+
   # Virtual job that can be configured as a required check before a PR can be merged.
   # As GitHub considers a check as successful if it is skipped, we need to check its status in
   # another workflow (check-required.yml) and create a check there.
@@ -143,14 +161,15 @@ jobs:
     name: All required checks done
     needs:
       - test
-      - build
+      - build-wheels
       - test-binary
+      - test-binary-manylinux
     runs-on: ubuntu-latest
     steps:
       - run: echo "All required checks done"
 
   benchmarks:
-    needs: build
+    needs: build-wheels
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -221,4 +240,3 @@ jobs:
       uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc
       with:
         packages-dir: dist	
-    
