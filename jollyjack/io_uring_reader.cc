@@ -7,10 +7,20 @@
 #include <cstring>
 #include <stdexcept>
 #include <iostream>
+
+#include <arrow/result.h>
+#include <arrow/status.h>
 #include <arrow/buffer.h>
+#include <arrow/util/future.h>
 
 // Thread-local ring and init
 thread_local io_uring* tls_ring = nullptr;
+
+
+std::shared_ptr<arrow::io::RandomAccessFile> GetUringReader(const std::string& filename)
+{
+    return std::make_shared<IoUringReader>(filename);
+}
 
 io_uring& GetThreadLocalRing() {
   if (!tls_ring) {
@@ -112,6 +122,13 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAt(int64_t posi
   }
 
   return std::shared_ptr<arrow::Buffer>(std::move(buffer));
+}
+
+// Default ReadAsync() implementation: simply issue the read on the context's executor
+arrow::Future<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAsync(const arrow::io::IOContext& ctx,
+                                                            int64_t position,
+                                                            int64_t nbytes) {
+  return RandomAccessFile::ReadAsync(ctx, position, nbytes);
 }
 
 arrow::Result<int64_t> IoUringReader::GetSize() {

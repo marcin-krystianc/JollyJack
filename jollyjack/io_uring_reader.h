@@ -1,9 +1,5 @@
-#pragma once
 
 #include <arrow/io/interfaces.h>
-#include <arrow/result.h>
-#include <arrow/status.h>
-#include <arrow/buffer.h>
 #include <liburing.h>
 #include <string>
 #include <memory>
@@ -22,6 +18,7 @@ class IoUringReader : public arrow::io::RandomAccessFile {
   arrow::Result<int64_t> Read(int64_t nbytes, void* out) override;
   arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override;
   arrow::Result<std::shared_ptr<arrow::Buffer>> ReadAt(int64_t position, int64_t nbytes) override;
+  arrow::Future<std::shared_ptr<arrow::Buffer>> ReadAsync(const arrow::io::IOContext& ctx, int64_t position,int64_t nbytes) override;
   arrow::Result<int64_t> GetSize() override;
 
  private:

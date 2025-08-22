@@ -29,7 +29,7 @@ extensions = [
     Extension( "jollyjack.jollyjack_cython", ["jollyjack/jollyjack_cython.pyx", "jollyjack/jollyjack.cc", "jollyjack/io_uring_reader.cc"],
         include_dirs = include_dirs,  
         library_dirs = library_dirs,
-        libraries=["arrow", "parquet"], 
+        libraries=["arrow", "parquet", "uring"], 
         language = "c++",
         extra_compile_args = extra_compile_args + (['/std:c++17'] if sys.platform.startswith('win') else ['-std=c++17']),
         extra_link_args = extra_link_args,
