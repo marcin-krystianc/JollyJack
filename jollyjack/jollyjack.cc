@@ -210,6 +210,46 @@ arrow::Status ReadColumn (int column_index
           break;
         }
 
+        case parquet::Type::INT32:
+        {
+          if (stride0_size != 4)
+          {
+            auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name + "') has INT32 data type, but the target value size is " + std::to_string(stride0_size) + "!");
+            return arrow::Status::UnknownError(msg);
+          }
+
+          auto typed_reader = static_cast<parquet::Int32Reader *>(column_reader.get());
+          while (rows_to_read > 0)
+          {
+            int64_t tmp_values_read = 0;
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (int32_t *)&base_ptr[target_offset], &tmp_values_read);
+            target_offset += tmp_values_read * stride0_size;
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
+          break;
+        }
+
+        case parquet::Type::INT64:
+        {
+          if (stride0_size != 8)
+          {
+            auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name + "') has INT64 data type, but the target value size is " + std::to_string(stride0_size) + "!");
+            return arrow::Status::UnknownError(msg);
+          }
+
+          auto typed_reader = static_cast<parquet::Int64Reader *>(column_reader.get());
+          while (rows_to_read > 0)
+          {
+            int64_t tmp_values_read = 0;
+            auto read_levels = typed_reader->ReadBatch(rows_to_read, nullptr, nullptr, (int64_t *)&base_ptr[target_offset], &tmp_values_read);
+            target_offset += tmp_values_read * stride0_size;
+            values_read += tmp_values_read;
+            rows_to_read -= tmp_values_read;
+          }
+          break;
+        }
+
         default:
         {
           auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has unsupported data type: " + std::to_string(column_reader->descr()->physical_type()) + "!");

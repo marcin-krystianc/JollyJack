@@ -226,7 +226,7 @@ class TestJollyJack(unittest.TestCase):
 
             self.assertTrue(f"Cannot read column=0 due to unsupported_encoding=DELTA_BYTE_ARRAY!" in str(context.exception), context.exception)
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64()], supported_encodings))
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()], supported_encodings))
     def test_read_dtype_numpy(self, pre_buffer, use_threads, use_memory_map, dtype, encoding):
 
         for (n_row_groups, n_columns, chunk_size) in [
@@ -268,7 +268,7 @@ class TestJollyJack(unittest.TestCase):
                     self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
                     pr.close()
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64()], supported_encodings))
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()], supported_encodings))
     def test_read_dtype_torch(self, pre_buffer, use_threads, use_memory_map, dtype, encoding):
 
         for (n_row_groups, n_columns, chunk_size) in [
@@ -309,7 +309,7 @@ class TestJollyJack(unittest.TestCase):
                     self.assertTrue(np.array_equal(tensor.numpy(), expected_data), f"{tensor.numpy()}\n{expected_data}")
                     pr.close()
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64()]))
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()]))
     def test_read_numpy_column_names(self, pre_buffer, use_threads, use_memory_map, dtype):
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -335,7 +335,7 @@ class TestJollyJack(unittest.TestCase):
             self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
             pr.close()
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64()]))
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()]))
     def test_read_torch_column_names(self, pre_buffer, use_threads, use_memory_map, dtype):
 
         with tempfile.TemporaryDirectory() as tmpdirname:
