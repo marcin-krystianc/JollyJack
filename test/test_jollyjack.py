@@ -1,3 +1,4 @@
+import pandas as pd
 import unittest
 import tempfile
 
@@ -20,7 +21,14 @@ n_row_groups = 2
 n_columns = 5
 n_rows = n_row_groups * chunk_size
 current_dir = os.path.dirname(os.path.realpath(__file__))
-supported_encodings = ['PLAIN', 'BYTE_STREAM_SPLIT']
+
+supported_dtype_encodings = [
+    (pa.float16(), 'PLAIN'), (pa.float16(), 'BYTE_STREAM_SPLIT'),
+    (pa.float32(), 'PLAIN'), (pa.float32(), 'BYTE_STREAM_SPLIT'), 
+    (pa.float64(), 'PLAIN'), (pa.float64(), 'BYTE_STREAM_SPLIT'), 
+    (pa.int32(), 'PLAIN'), (pa.int32(), 'BYTE_STREAM_SPLIT'), (pa.int32(), 'DELTA_BINARY_PACKED'), 
+    (pa.int64(), 'PLAIN'), (pa.int64(), 'BYTE_STREAM_SPLIT'), (pa.int64(), 'DELTA_BINARY_PACKED'), 
+]
 
 os_name = platform.system()
 
@@ -38,10 +46,27 @@ numpy_to_torch_dtype_dict = {
         np.complex128 : torch.complex128
     }
 
+def get_table_with_nulls(n_rows, n_columns, data_type=pa.float32()):
+
+    nullable_types = {pa.float32() : 'Float32', pa.float16() :pa.float16().to_pandas_dtype(), pa.float64() : 'Float64',
+                      pa.int16() : 'Int16', pa.int32() : 'Int32', pa.int64() : 'Int64',}
+    data = {}
+    for i in range(n_columns):
+        if pa.types.is_integer(data_type):
+            data[f'column_{i}'] = pd.array(np.random.randint(-100, 100, size = n_rows), dtype=nullable_types[data_type])
+        else:
+            data[f'column_{i}'] = pd.array(np.random.uniform(-100, 100, size = n_rows), dtype=nullable_types[data_type])
+
+    df = pd.DataFrame(data)
+    df.iloc[0, 0] = None
+
+    # Convert to PyArrow Table
+    return pa.Table.from_pandas(df)
+
 def get_table(n_rows, n_columns, data_type = pa.float32()):
     # Generate a random 2D array of floats using NumPy
     # Each column in the array represents a column in the final table
-    data = np.random.rand(n_rows, n_columns).astype(np.float32)
+    data = np.random.uniform(-100, 100, size = (n_rows, n_columns)).astype(np.float32)
 
     # Convert the NumPy array to a list of PyArrow Arrays, one for each column
     pa_arrays = [pa.array(data[:, i]).cast(data_type, safe = False) for i in range(n_columns)]
@@ -226,8 +251,8 @@ class TestJollyJack(unittest.TestCase):
 
             self.assertTrue(f"Cannot read column=0 due to unsupported_encoding=DELTA_BYTE_ARRAY!" in str(context.exception), context.exception)
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()], supported_encodings))
-    def test_read_dtype_numpy(self, pre_buffer, use_threads, use_memory_map, dtype, encoding):
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], supported_dtype_encodings))
+    def test_read_dtype_numpy(self, pre_buffer, use_threads, use_memory_map, dtype_encoding):
 
         for (n_row_groups, n_columns, chunk_size) in [
                 (1, 1, 1),
@@ -243,12 +268,21 @@ class TestJollyJack(unittest.TestCase):
                 (1, 1, 10_000_001), # +1 to make sure it is not a result of multip,lication of a round number
             ]:
 
+            dtype = dtype_encoding[0]
+            encoding = dtype_encoding[1]
+
             with self.subTest((n_row_groups, n_columns, chunk_size, dtype, pre_buffer, use_threads, encoding)):
                 n_rows = n_row_groups * chunk_size
                 with tempfile.TemporaryDirectory() as tmpdirname:
                     path = os.path.join(tmpdirname, "my.parquet")
                     table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = dtype)
-                    pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=False, store_schema=False, column_encoding = encoding)
+                    use_dictionary = False
+                    column_encoding = encoding
+                    if encoding in ['RLE_DICTIONARY', 'PLAIN_DICTIONARY']: 
+                        use_dictionary = True
+                        column_encoding = None
+
+                    pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=use_dictionary, write_statistics=False, store_schema=False, column_encoding = column_encoding)
 
                     # Create an empty array
                     np_array = np.zeros((n_rows, n_columns), dtype=dtype.to_pandas_dtype(), order='F')
@@ -268,8 +302,8 @@ class TestJollyJack(unittest.TestCase):
                     self.assertTrue(np.array_equal(np_array, expected_data), f"{np_array}\n{expected_data}")
                     pr.close()
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64(), pa.int32(), pa.int64()], supported_encodings))
-    def test_read_dtype_torch(self, pre_buffer, use_threads, use_memory_map, dtype, encoding):
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], supported_dtype_encodings))
+    def test_read_dtype_torch(self, pre_buffer, use_threads, use_memory_map, dtype_encoding):
 
         for (n_row_groups, n_columns, chunk_size) in [
                 (1, 1, 1),
@@ -284,13 +318,23 @@ class TestJollyJack(unittest.TestCase):
                 (1, 1, 1_000_001),
             ]:                
 
+            dtype = dtype_encoding[0]
+            encoding = dtype_encoding[1]
+
             with self.subTest((n_row_groups, n_columns, chunk_size, dtype, encoding)):
                 n_rows = n_row_groups * chunk_size
 
                 with tempfile.TemporaryDirectory() as tmpdirname:
                     path = os.path.join(tmpdirname, "my.parquet")
                     table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = dtype)
-                    pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=False, store_schema=False, column_encoding = encoding)
+                    
+                    use_dictionary = False
+                    column_encoding = encoding
+                    if encoding in ['RLE_DICTIONARY', 'PLAIN_DICTIONARY']: 
+                        use_dictionary = True
+                        column_encoding = None
+                        
+                    pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=use_dictionary, write_statistics=False, store_schema=False, column_encoding = column_encoding)
 
                     tensor = torch.zeros(n_columns, n_rows, dtype = numpy_to_torch_dtype_dict[dtype.to_pandas_dtype()]).transpose(0, 1)
 
@@ -452,21 +496,36 @@ class TestJollyJack(unittest.TestCase):
             else:
                 self.assertTrue(f"Trying to read row group {n_row_groups} but file only has {n_row_groups} row groups" in str(context.exception), context.exception)
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], [pa.float16(), pa.float32(), pa.float64()], supported_encodings))
-    def test_read_data_with_nulls(self, pre_buffer, use_threads, use_memory_map, dtype, encoding):
+    @parameterized.expand(itertools.product([False, True], [False, True], [False, True], supported_dtype_encodings))
+    def test_read_data_with_nulls(self, pre_buffer, use_threads, use_memory_map, dtype_encoding):
+
+        dtype = dtype_encoding[0]
+        encoding = dtype_encoding[1]
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = os.path.join(tmpdirname, "my.parquet")
-            table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = dtype)
-            df = table.to_pandas()
-            df.iloc[0, 0] = np.nan
-            table = pa.Table.from_pandas(df)
+            table = get_table_with_nulls(n_rows = n_rows, n_columns = n_columns, data_type = dtype)
 
-            pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=False, store_schema=False, column_encoding=encoding)
+            use_dictionary = False
+            column_encoding = encoding
+            if encoding in ['RLE_DICTIONARY', 'PLAIN_DICTIONARY']: 
+                use_dictionary = True
+                column_encoding = None
+
+            # Convert to PyArrow table
+            pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=use_dictionary, write_statistics=False, store_schema=True, column_encoding = column_encoding)
+
             # Create an empty array
             np_array = np.zeros((n_rows, n_columns), dtype = dtype.to_pandas_dtype(), order='F')
 
             with self.assertRaises(RuntimeError) as context:
+
+                pr = pq.ParquetReader()
+                pr.open(path)
+                all_data = pr.read_all()
+                pr.close()
+                self.assertTrue(all_data.columns[0].type, dtype)
+
                 jj.read_into_numpy (source = path
                                     , metadata = None
                                     , np_array = np_array
@@ -507,6 +566,7 @@ class TestJollyJack(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             path = os.path.join(tmpdirname, "my.parquet")
             table = get_table(n_rows = n_rows, n_columns = n_columns, data_type = dtype)
+
             pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=False, store_schema=False)
 
             # Create an empty array
