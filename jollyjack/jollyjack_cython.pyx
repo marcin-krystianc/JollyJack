@@ -93,7 +93,9 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
 
     cdef int64_t cexpected_rows = np_array.shape[0]
     cdef shared_ptr[CRandomAccessFile] rd_handle
+    print ("Before get_Reader")
     get_reader(source, use_memory_map, &rd_handle)
+    print ("After get_Reader")
 
     with nogil:
         cjollyjack.ReadIntoMemory (rd_handle

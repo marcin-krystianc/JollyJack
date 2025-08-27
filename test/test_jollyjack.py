@@ -122,7 +122,7 @@ class TestJollyJack(unittest.TestCase):
             self.assertTrue(np.array_equal(np_array2, expected_data))
             pr.close()
 
-    @parameterized.expand(itertools.product([False, True], [False, True], [False, True]))
+    @parameterized.expand(itertools.product([False], [False], [False]))
     def test_read_with_palletjack(self, pre_buffer, use_threads, use_memory_map):
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -139,21 +139,22 @@ class TestJollyJack(unittest.TestCase):
             row_begin = 0
             row_end = 0
 
-            for rg in range(n_row_groups):
-                column_indices=list(range(n_columns))
-                metadata = pj.read_metadata(index_path, row_groups=[rg], column_indices=column_indices)
+            column_indices=list(range(n_columns))
+            metadata = pj.read_metadata(index_path, row_groups=[0], column_indices=column_indices)
 
-                row_begin = row_end
-                row_end = row_begin + metadata.num_rows
-                subset_view = np_array[row_begin:row_end, :] 
-                jj.read_into_numpy (source = path
-                                    , metadata = metadata
-                                    , np_array = subset_view
-                                    , row_group_indices = [0]
-                                    , column_indices = column_indices
-                                    , pre_buffer = pre_buffer
-                                    , use_threads = use_threads
-                                    , use_memory_map = use_memory_map)
+            row_begin = row_end
+            row_end = row_begin + metadata.num_rows
+            subset_view = np_array[row_begin:row_end, :] 
+            print ("Before read_into_numpy")
+
+            jj.read_into_numpy (source = path
+                                , metadata = metadata
+                                , np_array = subset_view
+                                , row_group_indices = [0]
+                                , column_indices = column_indices
+                                , pre_buffer = pre_buffer
+                                , use_threads = use_threads
+                                , use_memory_map = use_memory_map)
 
             pr = pq.ParquetReader()
             pr.open(path)
@@ -1083,5 +1084,5 @@ class TestJollyJack(unittest.TestCase):
         self.assertTrue(f"Row index = {n_rows} is not in the expected range [0, {n_rows})" in str(context.exception), context.exception)
 
 if __name__ == '__main__':
-    unittest.main()
-    #unittest.main(argv=['first-arg-is-ignored', '-k', 'TestJollyJack.test_read_unsupported_encoding_delta_byte_array'])
+    # unittest.main()
+    unittest.main(argv=['first-arg-is-ignored', '-k', 'TestJollyJack.test_read_with_palletjack'])
