@@ -1,4 +1,6 @@
-#include "io_uring_random_access_file.h"
+// IoUringReader.cc
+
+#include "io_uring_reader.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -12,317 +14,129 @@
 #include <arrow/buffer.h>
 #include <arrow/util/future.h>
 
-struct IoUringRandomAccessFile::AsyncReadRequest {
-  uint64_t id;
-  int64_t position;
-  int64_t nbytes;
-  std::shared_ptr<arrow::ResizableBuffer> buffer;
-  arrow::Future<std::shared_ptr<arrow::Buffer>> future;
-  
-  AsyncReadRequest(uint64_t req_id, int64_t pos, int64_t size)
-      : id(req_id), position(pos), nbytes(size) {
-    future = arrow::Future<std::shared_ptr<arrow::Buffer>>::Make();
-  }
-  
-  arrow::Future<std::shared_ptr<arrow::Buffer>> GetFuture() {
-    return future;
-  }
-};
+// Thread-local ring and init
+thread_local io_uring* tls_ring = nullptr;
 
-arrow::Result<std::shared_ptr<IoUringRandomAccessFile>> 
-IoUringRandomAccessFile::Open(const std::string& path, int queue_depth) {
-  int fd = open(path.c_str(), O_RDONLY);
-  if (fd < 0) {
-    return arrow::Status::IOError("Failed to open file: ", path, " - ", strerror(errno));
+
+std::shared_ptr<arrow::io::RandomAccessFile> GetUringReader(const std::string& filename)
+{
+    return std::make_shared<IoUringReader>(filename);
+}
+
+io_uring& GetThreadLocalRing() {
+  if (!tls_ring) {
+    tls_ring = new io_uring();
+    if (io_uring_queue_init(64, tls_ring, 0) < 0) {
+      throw std::runtime_error("Failed to init thread-local io_uring");
+    }
+  }
+  return *tls_ring;
+}
+
+IoUringReader::IoUringReader(const std::string& filename)
+    : filename_(filename), pos_(0), size_(0), is_closed_(false) {
+  fd_ = open(filename_.c_str(), O_RDONLY);
+  if (fd_ < 0) {
+    throw std::runtime_error("Failed to open file: " + filename_);
   }
 
   struct stat st;
-  if (fstat(fd, &st) < 0) {
-    close(fd);
-    return arrow::Status::IOError("Failed to stat file: ", path, " - ", strerror(errno));
-  }
-
-  auto file = std::shared_ptr<IoUringRandomAccessFile>(
-      new IoUringRandomAccessFile(fd, st.st_size, queue_depth));
-  
-  ARROW_RETURN_NOT_OK(file->Initialize());
-  
-  return file;
-}
-
-IoUringRandomAccessFile::IoUringRandomAccessFile(int fd, int64_t file_size, int queue_depth)
-    : fd_(fd), 
-      file_size_(file_size), 
-      position_(0),
-      ring_{},
-      closed_(false),
-      queue_depth_(queue_depth),
-      next_request_id_(1),
-      should_stop_(false),
-      submission_cv_{},
-      requests_mutex_{},
-      submission_queue_{},
-      completion_thread_{},
-      completion_thread_status(arrow::Status::OK()) {
-}
-
-IoUringRandomAccessFile::~IoUringRandomAccessFile() {
-
-  if (!closed_.load()) {
-    Close().ok(); // Ignore errors in destructor
-  }
-}
-
-arrow::Status IoUringRandomAccessFile::Initialize() {
-  // Initialize io_uring
-  int ret = io_uring_queue_init(queue_depth_, &ring_, 0);
-  if (ret < 0) {
-    return arrow::Status::IOError("Failed to initialize io_uring: ", strerror(-ret));
-  }
-
-  // Start completion processing thread
-  should_stop_.store(false);
-  completion_thread_ = std::thread(&IoUringRandomAccessFile::ProcessCompletions, this);
-  
-  return arrow::Status::OK();
-}
-
-void IoUringRandomAccessFile::ProcessCompletions() {
-
-  struct __kernel_timespec no_timeout {};
-
-  while (!should_stop_.load()) {
-
-    // Wait & submit any pending requests
-    SubmitPendingRequests();
-
-    struct io_uring_cqe* cqe;
-    int ret = io_uring_wait_cqe_timeout(&ring_, &cqe, &no_timeout);
-    
-    if (ret == -ETIME || ret == -EINTR) {
-      continue;
-    }
-    
-    if (ret < 0) {
-      completion_thread_status = arrow::Status::IOError("Failed to wait io_uring: ", strerror(-ret));
-      break;
-    }
-
-    // Process completion
-    uint64_t request_id = reinterpret_cast<uint64_t>(io_uring_cqe_get_data(cqe));
-    
-    std::unique_ptr<AsyncReadRequest> request;
-    {
-      std::lock_guard<std::mutex> lock(requests_mutex_);
-      auto it = pending_requests_.find(request_id);
-      if (it == pending_requests_.end())
-      {        
-        completion_thread_status = arrow::Status::KeyError("Failed to find request id:", request_id);
-        break;
-      }
-
-      request = std::move(it->second);
-      pending_requests_.erase(it);
-    }
-
-    if (request) {
-      if (cqe->res < 0) {
-        // Error occurred
-        arrow::Status error = arrow::Status::IOError("Read failed: ", strerror(-cqe->res));
-        request->future.MarkFinished(error);
-      } else {
-        // Success - resize buffer to actual bytes read and complete future
-        ARROW_UNUSED(request->buffer->Resize(cqe->res));
-        request->future.MarkFinished(std::static_pointer_cast<arrow::Buffer>(request->buffer));
-      }
-      
-      io_uring_cqe_seen(&ring_, cqe);
-    }
-  }
-
-  std::lock_guard<std::mutex> lock(requests_mutex_);
-  for (auto& [id, request] : pending_requests_)
-  {
-    request->future.MarkFinished(completion_thread_status);
-  }
-}
-
-void IoUringRandomAccessFile::SubmitPendingRequests() {
-  
-  std::unique_lock<std::mutex> lk(requests_mutex_);
-  submission_cv_.wait_for (lk, std::chrono::milliseconds(1));
-  while (!submission_queue_.empty()) {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_);
-    if (!sqe) {
-      break; // Queue full, try again later
-    }
-
-    auto request = std::move(submission_queue_.front());
-    submission_queue_.pop();
-
-    // Prepare read operation
-    io_uring_prep_read(sqe, fd_, request->buffer->mutable_data(), 
-                       request->nbytes, request->position);
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(request->id));
-
-    // Store request for completion handling
-    pending_requests_[request->id] = std::move(request);
-  }
-
-  // Submit all prepared operations
-  if (!pending_requests_.empty()) {
-    io_uring_submit(&ring_);
-  }
-}
-
-uint64_t IoUringRandomAccessFile::GetNextRequestId() {
-  return next_request_id_.fetch_add(1);
-}
-
-arrow::Result<int64_t> IoUringRandomAccessFile::GetSize() {
-  if (closed_.load()) {
-    return arrow::Status::Invalid("File is closed");
-  }
-  return file_size_;
-}
-
-arrow::Future<std::shared_ptr<arrow::Buffer>> IoUringRandomAccessFile::ReadAsync(
-    const arrow::io::IOContext& ctx, int64_t position, int64_t nbytes) {
-
-  if (closed_.load()) {
-    return arrow::Future<std::shared_ptr<arrow::Buffer>>::MakeFinished(
-        arrow::Status::Invalid("File is closed"));
-  }
-
-  if (position < 0 || nbytes < 0) {
-    return arrow::Future<std::shared_ptr<arrow::Buffer>>::MakeFinished(
-        arrow::Status::Invalid("Invalid read parameters"));
-  }
-
-  if (position >= file_size_) {
-    ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateBuffer(0));
-    return arrow::Future<std::shared_ptr<arrow::Buffer>>::MakeFinished(std::move(buffer));
-  }
-
-  // Clamp read size to file bounds
-  nbytes = std::min(nbytes, file_size_ - position);
-
-  // Create async request
-  uint64_t request_id = GetNextRequestId();
-  auto request = std::make_unique<AsyncReadRequest>(request_id, position, nbytes);
-
-  // Allocate buffer
-  auto buffer_result = arrow::AllocateResizableBuffer(nbytes);
-  if (!buffer_result.ok()) {
-    return arrow::Future<std::shared_ptr<arrow::Buffer>>::MakeFinished(buffer_result.status());
-  }
-  request->buffer = std::move(buffer_result).ValueOrDie();
-
-  // Get the future from the promise
-  auto future = request->GetFuture();
-
-  // Queue for submission
-  {
-    std::lock_guard<std::mutex> lock(requests_mutex_);
-    submission_queue_.push(std::move(request));
-  }
-
-  submission_cv_.notify_one();
-  return future;
-}
-
-std::vector<arrow::Future<std::shared_ptr<arrow::Buffer>>> 
-IoUringRandomAccessFile::ReadManyAsync(const arrow::io::IOContext& ctx, 
-                                      const std::vector<arrow::io::ReadRange>& ranges) {
-  std::vector<arrow::Future<std::shared_ptr<arrow::Buffer>>> futures;
-  futures.reserve(ranges.size());
-
-  for (const auto& range : ranges) {
-    futures.push_back(ReadAsync(ctx, range.offset, range.length));
-  }
-
-  return futures;
-}
-
-// Synchronous fallback implementations
-arrow::Result<int64_t> IoUringRandomAccessFile::ReadAt(int64_t position, int64_t nbytes, void* out) {
-  auto future = ReadAsync(arrow::io::IOContext{}, position, nbytes);
-  ARROW_ASSIGN_OR_RAISE(auto buffer, future.result());
-
-  int64_t bytes_read = buffer->size();
-  std::memcpy(out, buffer->data(), bytes_read);
-  return bytes_read;
-}
-
-arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringRandomAccessFile::ReadAt(int64_t position, int64_t nbytes) {
-  auto future = ReadAsync(arrow::io::IOContext{}, position, nbytes);
-  return future.result();
-}
-
-arrow::Status IoUringRandomAccessFile::Close() {
-
-  if (closed_.exchange(true)) {
-    return arrow::Status::OK(); // Already closed
-  }
-
-  // Signal completion thread to stop
-  should_stop_.store(true);
-
-  // Wait for completion thread
-  if (completion_thread_.joinable()) {
-    completion_thread_.join();
-  }
-
-  // Clean up io_uring
-  if (ring_.ring_fd != 0)
-    io_uring_queue_exit(&ring_);
-
-  // Close file descriptor
-  if (fd_ >= 0) {
+  if (fstat(fd_, &st) < 0) {
     close(fd_);
-    fd_ = -1;
+    throw std::runtime_error("fstat failed: " + filename_);
   }
+  size_ = st.st_size;
+}
 
-  if (!completion_thread_status.ok())
-  {
-    return completion_thread_status;
+IoUringReader::~IoUringReader() {
+  (void)Close();
+}
+
+arrow::Status IoUringReader::Close() {
+  if (!is_closed_) {
+    close(fd_);
+    is_closed_ = true;
   }
-
   return arrow::Status::OK();
 }
 
-bool IoUringRandomAccessFile::closed() const {
-  return closed_.load();
+bool IoUringReader::closed() const {
+  return is_closed_;
 }
 
-// InputStream interface implementations
-arrow::Result<int64_t> IoUringRandomAccessFile::Tell() const {
-  if (closed_.load()) {
-    return arrow::Status::Invalid("File is closed");
-  }
-
-  return position_;
+arrow::Status IoUringReader::Seek(int64_t position) {
+  pos_ = position;
+  return arrow::Status::OK();
 }
 
-arrow::Result<int64_t> IoUringRandomAccessFile::Read(int64_t nbytes, void* out) {
-  ARROW_ASSIGN_OR_RAISE(int64_t bytes_read, ReadAt(position_, nbytes, out));
-  position_ += bytes_read;
-  return bytes_read;
+arrow::Result<int64_t> IoUringReader::Tell() const {
+  return pos_;
 }
 
-arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringRandomAccessFile::Read(int64_t nbytes) {
-  ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(position_, nbytes));
-  position_ += buffer->size();
+arrow::Result<int64_t> IoUringReader::Read(int64_t nbytes, void* out) {
+  ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(pos_, nbytes));
+  memcpy(out, buffer->data(), buffer->size());
+  pos_ += buffer->size();
+  return buffer->size();
+}
+
+arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringReader::Read(int64_t nbytes) {
+  ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(pos_, nbytes));
+  pos_ += buffer->size();
   return buffer;
 }
 
-arrow::Status IoUringRandomAccessFile::Seek(int64_t position) {
-  if (closed_.load()) {
-    return arrow::Status::Invalid("File is closed");
+arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAt(int64_t position, int64_t nbytes) {
+  io_uring& ring = GetThreadLocalRing();
+
+  ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateResizableBuffer(nbytes));
+
+  std::cerr << "ReadAt[begin]: position=" << position << ", nbytes=" << nbytes << std::endl;
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+  if (!sqe) {
+    return arrow::Status::IOError("get_sqe failed");
   }
-  if (position < 0) {
-    return arrow::Status::Invalid("Invalid seek position");
+
+  io_uring_prep_read(sqe, fd_, buffer->mutable_data(), nbytes, position);
+  sqe->flags |= IOSQE_ASYNC;  // encourage async
+
+  int submit_result = io_uring_submit(&ring);
+  if (submit_result < 0) {
+    return arrow::Status::IOError("submit failed");
   }
-  position_ = position;
-  return arrow::Status::OK();
+
+  struct io_uring_cqe* cqe = nullptr;
+  int wait_result = io_uring_wait_cqe(&ring, &cqe);
+  if (wait_result < 0) {
+    return arrow::Status::IOError("wait_cqe failed");
+  }
+
+  if (cqe->res < 0) {
+    io_uring_cqe_seen(&ring, cqe);
+    return arrow::Status::IOError("read failed");
+  }
+
+  int64_t bytes_read = cqe->res;
+  io_uring_cqe_seen(&ring, cqe);
+
+  if (bytes_read != nbytes) {
+    return arrow::Status::IOError("partial read: ", bytes_read);
+  }
+
+  std::cerr << "ReadAt[end]: position=" << position << ", nbytes=" << nbytes << std::endl;
+
+  return std::shared_ptr<arrow::Buffer>(std::move(buffer));
+}
+
+// Default ReadAsync() implementation: simply issue the read on the context's executor
+arrow::Future<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAsync(const arrow::io::IOContext& ctx,
+                                                            int64_t position,
+                                                            int64_t nbytes) {
+  return RandomAccessFile::ReadAsync(ctx, position, nbytes);
+}
+
+arrow::Result<int64_t> IoUringReader::GetSize() {
+  return size_;
 }
