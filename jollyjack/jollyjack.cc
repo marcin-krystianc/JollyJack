@@ -634,15 +634,7 @@ void CopyToRowMajor (void* src_buffer, size_t src_stride0_size, size_t src_strid
 std::shared_ptr<arrow::io::RandomAccessFile> GetIOUringReader(const std::string& filename)
 {
   // TODO(marcink) - How to determine an optimal queue depth?
-  const int queue_depth = 64;
-  auto result = IoUringRandomAccessFile::Open(filename, queue_depth);
-  
-  if (!result.ok())
-  {
-    throw std::runtime_error(result.status().ToString()); 
-  }
-
-  return result.ValueOrDie();
+  return GetUringReader(filename);
 }
 #else
 std::shared_ptr<arrow::io::RandomAccessFile> GetIOUringReader(const std::string& filename)

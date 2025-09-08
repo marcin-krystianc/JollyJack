@@ -1,6 +1,7 @@
 // IoUringReader.cc
 
-#include "io_uring_reader.h"
+#include "io_uring_random_access_file.h"
+
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -91,9 +92,6 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAt(int64_t posi
 
   ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateResizableBuffer(nbytes));
 
-  std::cerr << "ReadAt[begin]: position=" << position << ", nbytes=" << nbytes << std::endl;
-  std::this_thread::sleep_for(std::chrono::seconds(1));
-
   struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
   if (!sqe) {
     return arrow::Status::IOError("get_sqe failed");
@@ -124,8 +122,6 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> IoUringReader::ReadAt(int64_t posi
   if (bytes_read != nbytes) {
     return arrow::Status::IOError("partial read: ", bytes_read);
   }
-
-  std::cerr << "ReadAt[end]: position=" << position << ", nbytes=" << nbytes << std::endl;
 
   return std::shared_ptr<arrow::Buffer>(std::move(buffer));
 }
