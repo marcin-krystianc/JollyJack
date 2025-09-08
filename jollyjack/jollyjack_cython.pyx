@@ -95,7 +95,7 @@ cpdef void read_into_numpy (object source, FileMetaData metadata, cnp.ndarray np
 
     cdef shared_ptr[CRandomAccessFile] rd_handle
     cdef NativeFile nf
-    # get_reader(source, use_memory_map, &rd_handle)
+    get_reader(source, use_memory_map, &rd_handle)
 
     with nogil:
         cjollyjack.ReadIntoMemory (rd_handle

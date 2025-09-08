@@ -32,4 +32,3 @@ cdef extern from "jollyjack.h":
         vector[int] row_indices) except + nogil
 
     cdef shared_ptr[CRandomAccessFile] GetIOUringReader (const string& path) except + nogil
-    cdef shared_ptr[CRandomAccessFile] GetUringReader (const string& path) except + nogil

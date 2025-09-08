@@ -1117,34 +1117,6 @@ class TestJollyJack(unittest.TestCase):
             jj.copy_to_numpy_row_major(src_array = src_array, dst_array = dst_array, row_indices = [i + 1 for i in range(n_rows)])
         self.assertTrue(f"Row index = {n_rows} is not in the expected range [0, {n_rows})" in str(context.exception), context.exception)
 
-    def test_jollyjack(self):
-
-        n_rows = 10_000
-        n_columns = 40
-        chunk_size = 10_000
-        factor = 2
-        
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            path = os.path.join(tmpdirname, "my.parquet")
-            table = get_table(n_rows, n_columns)
-            pq.write_table(table, path, row_group_size=chunk_size, use_dictionary=False, write_statistics=False, store_schema=False)
-
-            pr = pq.ParquetReader()
-            pr.open(path)
-
-            # Create an array of zeros
-            np_array1 = np.zeros((n_rows, int(n_columns / factor)), dtype='f', order='F')
-
-            jj.read_into_numpy (source = path
-                                , metadata = pr.metadata
-                                , np_array = np_array1
-                                , row_group_indices = range(pr.metadata.num_row_groups)
-                                , column_indices = [i * factor for i in range (int(n_columns / factor))]
-                                , pre_buffer = True
-                                , use_threads = False
-                                , use_memory_map = False)
-        pr.close()
-
 if __name__ == '__main__':
-    # unittest.main()
-    unittest.main(argv=['first-arg-is-ignored', '-k', 'TestJollyJack.test_jollyjack'])
+    unittest.main()
+    #unittest.main(argv=['first-arg-is-ignored', '-k', 'TestJollyJack.test_read_unsupported_encoding_delta_byte_array'])
