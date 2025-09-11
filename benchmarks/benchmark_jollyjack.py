@@ -7,6 +7,7 @@ import platform
 import humanize
 import random
 import time
+import sys
 import os
 
 n_files = 10
@@ -60,6 +61,24 @@ def worker_jollyjack_numpy(use_threads, pre_buffer, dtype):
                            , column_indices = column_indices_to_read
                            , pre_buffer = pre_buffer
                            , use_threads = use_threads)
+
+def worker_jollyjack_uring_numpy(use_threads, pre_buffer, dtype):
+
+    np_array = np.zeros((chunk_size, n_columns_to_read), dtype=dtype, order='F')
+
+    for f in range(n_files):
+        pr = pq.ParquetReader()
+        pr.open(f"{parquet_path}{f}")
+
+        with jj.get_io_uring_reader(f"{parquet_path}{f}") as ur:
+            column_indices_to_read = random.sample(range(0, n_columns), n_columns_to_read)
+            jj.read_into_numpy(source = ur
+                            , metadata = pr.metadata
+                            , np_array = np_array
+                            , row_group_indices = [row_groups-1]
+                            , column_indices = column_indices_to_read
+                            , pre_buffer = pre_buffer
+                            , use_threads = use_threads)
 
 def worker_jollyjack_copy_to_row_major(dtype):
 
@@ -208,3 +227,13 @@ for compression, dtype in [(None, pa.float32()), ('snappy', pa.float32()), (None
     print(f".")
     for n_threads in [1, 2]:
         print(f"`numpy.copy_to_row_major` n_threads:{n_threads}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_numpy_copy_to_row_major(dtype.to_pandas_dtype())):.2f} seconds")
+
+    if sys.platform == "linux":
+        if os.environ.get('GITHUB_ACTIONS') != None:
+            print(f"TODO(marcink):Skipping io_uring benchamrks on athe github actions runner due to low performance!")
+        else:
+            print(f".")
+            for n_threads in [1, 2]:
+                for pre_buffer in [False, True]:
+                    for use_threads in [False, True]:
+                        print(f"`JollyJack.jollyjack_uring_numpy` n_threads:{n_threads}, use_threads:{use_threads}, pre_buffer:{pre_buffer}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_jollyjack_uring_numpy(use_threads, pre_buffer, dtype.to_pandas_dtype())):.2f} seconds")
