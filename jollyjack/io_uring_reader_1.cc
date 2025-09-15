@@ -1,4 +1,9 @@
-// IoUringReader.cc
+/**
+ * @brief Implements an Arrow RandomAccessFile that performs asynchronous reads through io_uring.
+ *        The default ReadAsync implementation utilizes the Arrow thread pool.
+ *
+ * @author Alan Fitton
+ */
 
 #include "io_uring_reader_1.h"
 
