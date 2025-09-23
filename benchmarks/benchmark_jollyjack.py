@@ -157,3 +157,4 @@ for compression, dtype in [(None, pa.float32()), ('snappy', pa.float32()), (None
         for n_threads in [1, 2]:
             for pre_buffer in [False, True]:
                 print(f"`JollyJack.read_into_torch` n_threads:{n_threads}, pre_buffer:{pre_buffer}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda:worker_jollyjack_torch(pre_buffer, dtype.to_pandas_dtype())):.2f} seconds")
+
