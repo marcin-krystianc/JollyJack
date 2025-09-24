@@ -201,10 +201,10 @@ jobs:
     - name: Run benchmarks
       run: |
 
-        pip install jollyjack==0.15.0 humanize numpy
+        pip install jollyjack==0.15.0 humanize numpy pandas
         python3 ./benchmarks/benchmark_jollyjack.py
 
-        pip install jollyjack==0.18.0 humanize numpy
+        pip install jollyjack==0.18.0 humanize numpy pandas
         python3 ./benchmarks/benchmark_jollyjack.py
 
   publish:
