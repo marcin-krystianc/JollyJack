@@ -206,11 +206,11 @@ jobs:
 
     - name: Run benchmarks
       run: |
-        python3 -m pip install -r requirements.txt
-        # Keep in mind that if the local and remote versions are the same, the remote version will be installed
-        pip install JollyJack==0.8.1 --pre --find-links ./dist --break-system-packages --only-binary=:all:
-        # So now ensure that the local version is installed 
-        pip install JollyJack --pre --find-links ./dist --break-system-packages --only-binary=:all: --force-reinstall --no-index --no-deps
+
+        pip install pyarrow=20.0.0 humanize numpy
+        python3 ./benchmarks/benchmark_jollyjack.py
+
+        pip install pyarrow=21.0.0 humanize numpy
         python3 ./benchmarks/benchmark_jollyjack.py
 
   publish:
