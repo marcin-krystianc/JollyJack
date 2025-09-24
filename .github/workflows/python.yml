@@ -201,6 +201,8 @@ jobs:
     - name: Run benchmarks
       run: |
 
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+
         pip install jollyjack==0.15.0 humanize numpy pandas
         python3 ./benchmarks/benchmark_jollyjack.py
 
