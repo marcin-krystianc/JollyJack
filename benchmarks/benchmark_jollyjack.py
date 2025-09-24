@@ -131,9 +131,13 @@ def measure_reading(max_workers, worker):
         pool.shutdown(wait=True)
         tt.append(time.time() - t)
 
+    print (tt)
     return min (tt)
 
-for compression, dtype in [(None, pa.float32()), ('snappy', pa.float32()), (None, pa.float16())]:
+print (f"pyarrow.version = {pa.__version__}")
+print (f"pyarrow.file = {pa.__file__}")
+
+for compression, dtype in [(None, pa.float32())]:
     
     print(f".")
     for f in range(n_files):
