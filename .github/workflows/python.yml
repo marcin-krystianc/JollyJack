@@ -201,10 +201,10 @@ jobs:
     - name: Run benchmarks
       run: |
 
-        pip install pyarrow==20.0.0 humanize numpy
+        pip install jollyjack==0.15.0 humanize numpy
         python3 ./benchmarks/benchmark_jollyjack.py
 
-        pip install pyarrow==21.0.0 humanize numpy
+        pip install pyarrow==0.18.0 humanize numpy
         python3 ./benchmarks/benchmark_jollyjack.py
 
   publish:
