@@ -169,11 +169,40 @@ void ReadIntoMemoryIOUring (const std::string& path
       io_uring_cqe_seen(&ring, cqe);
 
       const auto& col_metadata = row_group_metadata->ColumnChunk(request.column_index);
-      std::shared_ptr<parquet::ArrowInputStream> data = std::make_shared<::arrow::io::BufferReader>(request.buffer);
-      auto page_reader = parquet::PageReader::Open(data, col_metadata->num_values(), col_metadata->compression(), reader_properties, false, nullptr);
-      auto descr = file_metadata->schema()->Column(request.column_index);
-      auto column_reader = parquet::ColumnReader::Make (descr, std::move(page_reader));
+      const auto& crypto_metadata = col_metadata->crypto_metadata();
+      const auto& data = std::make_shared<::arrow::io::BufferReader>(request.buffer);
+      std::unique_ptr<parquet::PageReader> page_reader = nullptr;
+      
+      // Prior to Arrow 3.0.0, is_compressed was always set to false in column headers,
+      // even if compression was used. See ARROW-17100.
+      bool always_compressed = file_metadata->writer_version().VersionLt(parquet::ApplicationVersion::PARQUET_CPP_10353_FIXED_VERSION());
 
+      // Column is encrypted only if crypto_metadata exists.
+      if (!crypto_metadata) {
+        page_reader = parquet::PageReader::Open(data, col_metadata->num_values(), col_metadata->compression(), reader_properties, always_compressed, nullptr);
+      }
+      else {
+        // The column is encrypted
+        auto* file_decryptor = file_metadata->file_decryptor().get();
+        auto meta_decryptor_factory = InternalFileDecryptor::GetColumnMetaDecryptorFactory(
+            file_decryptor, crypto_metadata.get());
+        auto data_decryptor_factory = InternalFileDecryptor::GetColumnDataDecryptorFactory(
+            file_decryptor, crypto_metadata.get());
+
+        constexpr auto kEncryptedOrdinalLimit = 32767;
+     
+
+        parquet::CryptoContext ctx{col->has_dictionary_page(),
+                          static_cast<int16_t>(row_group_ordinal_), static_cast<int16_t>(i),
+                          std::move(meta_decryptor_factory),
+                          std::move(data_decryptor_factory)};
+        page_reader = PageReader::Open(stream, col_metadata->num_values(), col_metadata->compression(), reader_properties,
+                                always_compressed, &ctx);
+      }
+
+                                    
+    auto descr = file_metadata->schema()->Column(request.column_index);
+    auto column_reader = parquet::ColumnReader::Make (descr, std::move(page_reader));
       auto status = ReadColumn (request.column_counter
       , request.target_row
       , column_reader
