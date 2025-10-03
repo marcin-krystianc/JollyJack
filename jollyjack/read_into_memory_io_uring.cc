@@ -17,6 +17,22 @@
 
 using arrow::Status;
 
+
+class FantomReader : public arrow::io::RandomAccessFile {
+ public:
+  explicit FantomReader(const std::string& filename);
+  ~FantomReader() override;
+
+  arrow::Result<std::shared_ptr<arrow::Buffer>> ReadAt(int64_t position, int64_t nbytes) override;
+
+ private:
+};
+
+arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader:: ReadAt(int64_t position, int64_t nbytes)
+{
+  return this->ReadAt(position, nbytes);
+}
+
 void ReadIntoMemoryIOUring (const std::string& path
     , std::shared_ptr<parquet::FileMetaData> file_metadata
     , void* buffer
@@ -44,7 +60,8 @@ void ReadIntoMemoryIOUring (const std::string& path
 
   parquet::ReaderProperties reader_properties = parquet::default_reader_properties();
   auto arrowReaderProperties = parquet::default_arrow_reader_properties();
-  std::unique_ptr<parquet::ParquetFileReader> parquet_reader = parquet::ParquetFileReader::OpenFile(path, false, reader_properties, file_metadata);
+  auto fantomReader = std::make_shared<FantomReader>(path);
+  std::unique_ptr<parquet::ParquetFileReader> parquet_reader = parquet::ParquetFileReader::Open(fantomReader, reader_properties, file_metadata);
   file_metadata = parquet_reader->metadata();
 
   if (column_names.size() > 0)
