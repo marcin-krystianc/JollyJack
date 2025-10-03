@@ -61,6 +61,10 @@ FantomReader::~FantomReader() {
   (void)Close();
 }
 
+arrow::Result<int64_t> FantomReader::GetSize() {
+  return size_;
+}
+
 arrow::Status FantomReader::Close() {
   if (!is_closed_) {
     close(fd_);
