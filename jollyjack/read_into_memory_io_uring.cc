@@ -24,13 +24,86 @@ class FantomReader : public arrow::io::RandomAccessFile {
   ~FantomReader() override;
 
   arrow::Result<std::shared_ptr<arrow::Buffer>> ReadAt(int64_t position, int64_t nbytes) override;
-
+  arrow::Result<int64_t> GetSize() override;
+  
+  bool closed() const override;
+  arrow::Status Seek(int64_t position) override;  
+  arrow::Status Close() override;
+  arrow::Result<int64_t> Tell() const override;
+  arrow::Result<int64_t> Read(int64_t nbytes, void* out) override;
+  arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override;
  private:
+  int fd_;
+  //static thread_local io_uring ring_;
+  std::string filename_;
+  int64_t pos_ = 0;
+  int64_t size_ = 0;
+  bool is_closed_ = false;
 };
 
-arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader:: ReadAt(int64_t position, int64_t nbytes)
+
+FantomReader::FantomReader(const std::string& filename)
+    : filename_(filename), pos_(0), size_(0), is_closed_(false) {
+  fd_ = open(filename_.c_str(), O_RDONLY);
+  if (fd_ < 0) {
+    throw std::runtime_error("Failed to open file: " + filename_);
+  }
+
+  struct stat st;
+  if (fstat(fd_, &st) < 0) {
+    close(fd_);
+    throw std::runtime_error("fstat failed: " + filename_);
+  }
+  size_ = st.st_size;
+}
+
+FantomReader::~FantomReader() {
+  (void)Close();
+}
+
+arrow::Status FantomReader::Close() {
+  if (!is_closed_) {
+    close(fd_);
+    is_closed_ = true;
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Result<int64_t> GetSize()
+{
+  return 0;
+}
+
+arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(int64_t position, int64_t nbytes)
 {
   return this->ReadAt(position, nbytes);
+}
+
+bool  FantomReader::closed() const {
+  return is_closed_;
+}
+
+arrow::Status FantomReader::Seek(int64_t position) {
+  pos_ = position;
+  return arrow::Status::OK();
+}
+
+arrow::Result<int64_t> FantomReader::Tell() const {
+  return pos_;
+}
+
+arrow::Result<int64_t> FantomReader::Read(int64_t nbytes, void* out) {
+  ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(pos_, nbytes));
+  memcpy(out, buffer->data(), buffer->size());
+  pos_ += buffer->size();
+  return buffer->size();
+}
+
+
+arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::Read(int64_t nbytes) {
+  ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(pos_, nbytes));
+  pos_ += buffer->size();
+  return buffer;
 }
 
 void ReadIntoMemoryIOUring (const std::string& path
