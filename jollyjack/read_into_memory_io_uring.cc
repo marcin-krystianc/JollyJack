@@ -23,6 +23,7 @@ class FantomReader : public arrow::io::RandomAccessFile {
   explicit FantomReader(const std::string& filename);
   ~FantomReader() override;
 
+  arrow::Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) override;
   arrow::Result<std::shared_ptr<arrow::Buffer>> ReadAt(int64_t position, int64_t nbytes) override;
   arrow::Result<int64_t> GetSize() override;
   
@@ -32,6 +33,7 @@ class FantomReader : public arrow::io::RandomAccessFile {
   arrow::Result<int64_t> Tell() const override;
   arrow::Result<int64_t> Read(int64_t nbytes, void* out) override;
   arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override;
+
  private:
   int fd_;
   //static thread_local io_uring ring_;
@@ -78,9 +80,21 @@ arrow::Result<int64_t> GetSize()
   return 0;
 }
 
+arrow::Result<int64_t> FantomReader::ReadAt(int64_t position, int64_t nbytes, void* out)
+{
+  return pread(fd_, out, nbytes, position);
+}
+
 arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(int64_t position, int64_t nbytes)
 {
-  return this->ReadAt(position, nbytes);
+  ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateResizableBuffer(nbytes));
+  ARROW_ASSIGN_OR_RAISE(int64_t bytes_read, ReadAt(position, nbytes, buffer->mutable_data()));
+  if (bytes_read < nbytes) {
+    RETURN_NOT_OK(buffer->Resize(bytes_read));
+    buffer->ZeroPadding();
+  }
+
+  return std::shared_ptr<arrow::Buffer>(std::move(buffer));
 }
 
 bool  FantomReader::closed() const {
