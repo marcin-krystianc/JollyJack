@@ -33,7 +33,8 @@ class FantomReader : public arrow::io::RandomAccessFile {
   arrow::Result<int64_t> Tell() const override;
   arrow::Result<int64_t> Read(int64_t nbytes, void* out) override;
   arrow::Result<std::shared_ptr<arrow::Buffer>> Read(int64_t nbytes) override;
-
+  void SetBuffer (long offset, std::shared_ptr<arrow::Buffer> buffer);
+  
  private:
   int fd_;
   //static thread_local io_uring ring_;
@@ -41,8 +42,9 @@ class FantomReader : public arrow::io::RandomAccessFile {
   int64_t pos_ = 0;
   int64_t size_ = 0;
   bool is_closed_ = false;
+  std::shared_ptr<arrow::Buffer> buffer_;
+  int64_t buffer_offset_;
 };
-
 
 FantomReader::FantomReader(const std::string& filename)
     : filename_(filename), pos_(0), size_(0), is_closed_(false) {
@@ -87,6 +89,13 @@ arrow::Result<int64_t> FantomReader::ReadAt(int64_t position, int64_t nbytes, vo
 
 arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(int64_t position, int64_t nbytes)
 {
+  if (buffer_ != nullptr && position == buffer_offset_ && buffer_->size() == nbytes)
+  {
+    auto buffer = buffer_;
+    buffer_ = nullptr;
+    return buffer;
+  }
+
   ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateResizableBuffer(nbytes));
   ARROW_ASSIGN_OR_RAISE(int64_t bytes_read, ReadAt(position, nbytes, buffer->mutable_data()));
   if (bytes_read < nbytes) {
@@ -117,11 +126,15 @@ arrow::Result<int64_t> FantomReader::Read(int64_t nbytes, void* out) {
   return buffer->size();
 }
 
-
 arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::Read(int64_t nbytes) {
   ARROW_ASSIGN_OR_RAISE(auto buffer, ReadAt(pos_, nbytes));
   pos_ += buffer->size();
   return buffer;
+}
+
+void FantomReader::SetBuffer(long offset, std::shared_ptr<arrow::Buffer> buffer) {
+  buffer_ = buffer;
+  buffer_offset_ = offset;
 }
 
 void ReadIntoMemoryIOUring (const std::string& path
@@ -275,9 +288,9 @@ void ReadIntoMemoryIOUring (const std::string& path
       }
 
       io_uring_cqe_seen(&ring, cqe);
-
-      const auto& col_metadata = row_group_metadata->ColumnChunk(request.column_index);
+      fantomReader->SetBuffer(request.offset, request.buffer);
       /*
+      const auto& col_metadata = row_group_metadata->ColumnChunk(request.column_index);
       std::shared_ptr<parquet::ArrowInputStream> data = std::make_shared<::arrow::io::BufferReader>(request.buffer);
       auto page_reader = parquet::PageReader::Open(data, col_metadata->num_values(), col_metadata->compression(), reader_properties, false, nullptr);
       auto descr = file_metadata->schema()->Column(request.column_index);
