@@ -277,10 +277,12 @@ void ReadIntoMemoryIOUring (const std::string& path
       io_uring_cqe_seen(&ring, cqe);
 
       const auto& col_metadata = row_group_metadata->ColumnChunk(request.column_index);
+      /*
       std::shared_ptr<parquet::ArrowInputStream> data = std::make_shared<::arrow::io::BufferReader>(request.buffer);
       auto page_reader = parquet::PageReader::Open(data, col_metadata->num_values(), col_metadata->compression(), reader_properties, false, nullptr);
       auto descr = file_metadata->schema()->Column(request.column_index);
-      auto column_reader = parquet::ColumnReader::Make (descr, std::move(page_reader));
+      */
+      auto column_reader = parquet_reader->RowGroup(request.row_group)->Column(request.column_index);
 
       auto status = ReadColumn (request.column_counter
       , request.target_row
