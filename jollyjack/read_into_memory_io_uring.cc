@@ -58,6 +58,13 @@ FantomReader::~FantomReader() {
   (void)Close();
 }
 
+arrow::Status FantomReader::Close() {
+  return arrow::Status::OK();
+}
+bool FantomReader::closed() const {
+  return false;
+}
+
 arrow::Result<int64_t> FantomReader::GetSize() {
   return size_;
 }
