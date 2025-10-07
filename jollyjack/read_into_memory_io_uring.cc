@@ -21,7 +21,7 @@ using arrow::Status;
 
 class FantomReader : public arrow::io::RandomAccessFile {
  public:
-  explicit FantomReader(const std::string& filename);
+  explicit FantomReader(int fd);
   ~FantomReader() override;
 
   arrow::Result<int64_t> ReadAt(int64_t position, int64_t nbytes, void* out) override;
@@ -38,27 +38,19 @@ class FantomReader : public arrow::io::RandomAccessFile {
   
  private:
   int fd_;
-  //static thread_local io_uring ring_;
-  std::string filename_;
   int64_t pos_ = 0;
   int64_t size_ = 0;
-  bool is_closed_ = false;
   std::shared_ptr<arrow::Buffer> buffer_;
   int64_t buffer_offset_;
 };
 
-FantomReader::FantomReader(const std::string& filename)
-    : filename_(filename), pos_(0), size_(0), is_closed_(false) {
-  fd_ = open(filename_.c_str(), O_RDONLY);
-  if (fd_ < 0) {
-    throw std::runtime_error("Failed to open file: " + filename_);
-  }
-
+FantomReader::FantomReader(int fd)
+    : fd_(fd), pos_(0), size_(0) {
   struct stat st;
   if (fstat(fd_, &st) < 0) {
-    close(fd_);
-    throw std::runtime_error("fstat failed: " + filename_);
+    throw std::runtime_error("fstat failed");
   }
+
   size_ = st.st_size;
 }
 
@@ -68,14 +60,6 @@ FantomReader::~FantomReader() {
 
 arrow::Result<int64_t> FantomReader::GetSize() {
   return size_;
-}
-
-arrow::Status FantomReader::Close() {
-  if (!is_closed_) {
-    close(fd_);
-    is_closed_ = true;
-  }
-  return arrow::Status::OK();
 }
 
 arrow::Result<int64_t> GetSize()
@@ -107,10 +91,6 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(int64_t posit
   return std::shared_ptr<arrow::Buffer>(std::move(buffer));
 }
 
-bool  FantomReader::closed() const {
-  return is_closed_;
-}
-
 arrow::Status FantomReader::Seek(int64_t position) {
   pos_ = position;
   return arrow::Status::OK();
@@ -138,6 +118,17 @@ void FantomReader::SetBuffer(long offset, std::shared_ptr<arrow::Buffer> buffer)
   buffer_offset_ = offset;
 }
 
+struct Request
+{
+  int row_group;
+  int column_counter;
+  int column_index;
+  int64_t offset;
+  int64_t length;
+  int64_t target_row = 0;
+  std::shared_ptr<arrow::Buffer> buffer;
+};
+
 void ReadIntoMemoryIOUring (const std::string& path
     , std::shared_ptr<parquet::FileMetaData> file_metadata
     , void* buffer
@@ -164,8 +155,7 @@ void ReadIntoMemoryIOUring (const std::string& path
   }
 
   parquet::ReaderProperties reader_properties = parquet::default_reader_properties();
-  auto arrowReaderProperties = parquet::default_arrow_reader_properties();
-  auto fantomReader = std::make_shared<FantomReader>(path);
+  auto fantomReader = std::make_shared<FantomReader>(fd);
   std::unique_ptr<parquet::ParquetFileReader> parquet_reader = parquet::ParquetFileReader::Open(fantomReader, reader_properties, file_metadata);
   file_metadata = parquet_reader->metadata();
 
@@ -186,17 +176,6 @@ void ReadIntoMemoryIOUring (const std::string& path
         column_indices.push_back(column_index);
       }
   }
-
-  struct Request
-  {
-    int row_group;
-    int column_counter;
-    int column_index;
-    int64_t offset;
-    int64_t length;
-    int64_t target_row = 0;
-    std::shared_ptr<arrow::Buffer> buffer;
-  };
     
   std::vector<Request> requests(column_indices.size());
   struct io_uring ring = {};
@@ -289,13 +268,8 @@ void ReadIntoMemoryIOUring (const std::string& path
       }
 
       io_uring_cqe_seen(&ring, cqe);
+
       fantomReader->SetBuffer(request.offset, request.buffer);
-      /*
-      const auto& col_metadata = row_group_metadata->ColumnChunk(request.column_index);
-      std::shared_ptr<parquet::ArrowInputStream> data = std::make_shared<::arrow::io::BufferReader>(request.buffer);
-      auto page_reader = parquet::PageReader::Open(data, col_metadata->num_values(), col_metadata->compression(), reader_properties, false, nullptr);
-      auto descr = file_metadata->schema()->Column(request.column_index);
-      */
       auto column_reader = parquet_reader->RowGroup(request.row_group)->Column(request.column_index);
 
       auto status = ReadColumn (request.column_counter
