@@ -573,8 +573,9 @@ void ReadIntoMemoryIOUring(
   const std::vector<int>& target_column_indices,
   bool pre_buffer,
   bool use_threads,
-  int64_t expected_rows
-) {
+  int64_t expected_rows, 
+  arrow::io::CacheOptions cache_options)
+{
   ValidateTargetRowRanges(target_row_ranges);
 
   auto [fd, fantom_reader, parquet_reader, metadata] = 
