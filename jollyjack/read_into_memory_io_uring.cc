@@ -88,11 +88,8 @@ arrow::Result<int64_t> FantomReader::ReadAt(
 arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(
   int64_t position, int64_t nbytes
 ) {
-  if (buffer_ != nullptr && position == buffer_offset_ && 
-      buffer_->size() == nbytes) {
-    auto buffer = buffer_;
-    buffer_ = nullptr;
-    return buffer;
+  if (buffer_ != nullptr && position >= buffer_offset_ && buffer_offset_ + buffer_->size() >= position + nbytes) {
+    return arrow::SliceBuffer(std::move(buffer_), buffer_offset_ - position, nbytes);
   }
 
   if (buffer_ != nullptr)
