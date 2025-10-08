@@ -146,15 +146,15 @@ void FantomReader::SetBuffer(
 struct ColumnRead {
   int column_counter;
   int column_index;
-  int64_t target_row;
-  std::shared_ptr<parquet::RowGroupReader> row_group_reader;
 };
 
 // Represents a coalesced I/O request that may serve multiple columns
 struct CoalescedRequest {
-  int64_t offset;
-  int64_t length;  
   int row_group;
+  int64_t offset;
+  int64_t length;
+  int64_t target_row;
+  std::shared_ptr<parquet::RowGroupReader> row_group_reader;
   std::shared_ptr<arrow::Buffer> buffer;
   std::vector<ColumnRead> column_reads;
 };
@@ -293,6 +293,9 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       request.offset = coalesced_range.offset;
       request.length = coalesced_range.length;
       request.row_group = row_group;
+      request.target_row = current_target_row;
+      request.row_group_reader = row_group_reader;
+
       int64_t coalesced_end = coalesced_range.offset + coalesced_range.length;
       
       // Find all column ranges that overlap with this coalesced range
@@ -314,10 +317,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
           
           ColumnRead column_read;
           column_read.column_counter = i;
-          column_read.column_index = column_indices[i];
-          column_read.target_row = current_target_row;
-          column_read.row_group_reader = row_group_reader;
-          
+          column_read.column_index = column_indices[i];          
           request.column_reads.push_back(column_read);
         }
         
@@ -424,7 +424,7 @@ void ProcessCoalescedCompletion(
   // Process each column covered by this coalesced read
   for (const auto& column_read : request.column_reads) 
   {
-    auto column_reader = column_read.row_group_reader->Column(column_read.column_index);
+    auto column_reader = request.row_group_reader->Column(column_read.column_index);
     
     size_t target_row_ranges_idx = CalculateTargetRowRangesIndex(
       request.row_group, row_groups, file_metadata, target_row_ranges
@@ -433,7 +433,7 @@ void ProcessCoalescedCompletion(
     auto row_group_metadata = file_metadata->RowGroup(request.row_group);
     auto status = ReadColumn(
       column_read.column_counter,
-      column_read.target_row,
+      request.target_row,
       column_reader,
       row_group_metadata.get(), // TODO(marcink - optimize it)
       buffer,
