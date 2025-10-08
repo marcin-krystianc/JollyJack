@@ -134,6 +134,7 @@ struct Request
   int64_t length;
   int64_t target_row = 0;
   std::shared_ptr<arrow::Buffer> buffer;
+  std::shared_ptr<parquet::RowGroupReader> row_group_reader;
 };
 
 void ReadIntoMemoryIOUring (const std::string& path
@@ -203,6 +204,7 @@ void ReadIntoMemoryIOUring (const std::string& path
   {
     size_t requestIndex = 0;
     auto row_group = row_groups[r_idx];
+    auto row_group_reader = parquet_reader->RowGroup(row_group);
     auto row_group_metadata = file_metadata->RowGroup(row_group);
     for (size_t c_idx = 0; c_idx < column_indices.size(); c_idx++)
     {
@@ -211,6 +213,7 @@ void ReadIntoMemoryIOUring (const std::string& path
       request.column_counter = c_idx;
       request.column_index = column_indices[c_idx];      
       request.target_row = target_row;
+      request.row_group_reader = row_group_reader;
       row_groups_for_read_ranges[0] = request.row_group;
       column_indices_for_read_ranges[0] = request.column_index;
       
@@ -230,7 +233,7 @@ void ReadIntoMemoryIOUring (const std::string& path
       // Allocate buffer
       auto buffer_result = arrow::AllocateBuffer(request.length);
       if (!buffer_result.ok()) {
-      throw std::logic_error(std::string("Unable to AllocateResizableBuffer: ") + buffer_result.status().message());
+        throw std::logic_error(std::string("Unable to AllocateResizableBuffer: ") + buffer_result.status().message());
       }
 
       request.buffer = std::move(buffer_result).ValueOrDie();
@@ -267,7 +270,7 @@ void ReadIntoMemoryIOUring (const std::string& path
         // Error occurred
         auto msg = std::string("Read failed: ") + strerror(-cqe->res);
         throw std::logic_error(msg);
-      } 
+      }
       else if (cqe->res != request.length) {
         // Success? - resize buffer to actual bytes read and complete future
         auto msg = std::string("Read failed? cqe->res != request.length: ") + std::to_string(cqe->res) + " != " + std::to_string(request.length);
@@ -277,7 +280,7 @@ void ReadIntoMemoryIOUring (const std::string& path
       io_uring_cqe_seen(&ring, cqe);
 
       fantomReader->SetBuffer(request.offset, request.buffer);
-      auto column_reader = parquet_reader->RowGroup(request.row_group)->Column(request.column_index);
+      auto column_reader = request.row_group_reader->Column(request.column_index);
 
       auto status = ReadColumn (request.column_counter
       , request.target_row
