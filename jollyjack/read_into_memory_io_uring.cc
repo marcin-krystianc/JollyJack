@@ -248,6 +248,15 @@ bool ColumnInRange(
   return col_offset < range_end && col_end > range_offset;
 }
 
+// Represents a read range with associated metadata
+struct ColumnRangeInfo {
+  int64_t offset;
+  int64_t length;
+  size_t column_idx;
+  
+  int64_t end() const { return offset + length; }
+};
+
 // Create coalesced read requests using GetReadRanges efficiently
 std::vector<CoalescedRequest> CreateCoalescedRequests(
   parquet::ParquetFileReader* parquet_reader,
@@ -271,7 +280,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
     single_row_group[0] = row_group;
 
     // Get individual read ranges for each column - O(columns)
-    std::vector<arrow::io::ReadRange> column_ranges;
+    std::vector<ColumnRangeInfo> column_ranges;
     column_ranges.resize(column_indices.size());
 
     for (size_t c_idx = 0; c_idx < column_indices.size(); c_idx++) {
@@ -281,14 +290,15 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         single_row_group, single_column, 0, 1
       ).ValueOrDie();
 
-      auto &info = column_ranges[c_idx];
+      ColumnRangeInfo &info = column_ranges[c_idx];
       info.offset = ranges[0].offset;
       info.length = ranges[0].length;
+      info.column_idx = c_idx;
     }
 
     // Sort column ranges by offset for efficient matching - O(columns * log(columns))
     std::sort(column_ranges.begin(), column_ranges.end(),
-      [](const arrow::io::ReadRange& a, const arrow::io::ReadRange& b) {
+      [](const ColumnRangeInfo& a, const ColumnRangeInfo& b) {
         return a.offset < b.offset;
       });
 
@@ -310,7 +320,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       // Find all column ranges that overlap with this coalesced range
       // Start from where we left off (columns are sorted)
       size_t start_col_idx = col_idx;
-
+      
       // Scan forward to find all overlapping columns
       for (size_t i = start_col_idx; i < column_ranges.size(); i++) {
         const auto& col_range = column_ranges[i];
@@ -322,16 +332,16 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         
         // Check for overlap
         if (col_range.offset < coalesced_end && 
-            (col_range.offset + col_range.length) > coalesced_range.offset) {
+            col_range.end() > coalesced_range.offset) {
           
           ColumnRead column_read;
-          column_read.column_counter = i;
-          column_read.column_index = column_indices[i];          
+          column_read.column_counter = col_range.column_idx;
+          column_read.column_index = column_indices[col_range.column_idx];
           request.column_reads.push_back(column_read);
         }
         
         // Update col_idx for next iteration
-        if (i >= col_idx && (col_range.offset + col_range.length) <= coalesced_end) {
+        if (i >= col_idx && col_range.end() <= coalesced_end) {
           col_idx = i + 1;
         }
       }
