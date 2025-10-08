@@ -267,29 +267,26 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
   for (int row_group : row_groups) {
     auto row_group_reader = parquet_reader->RowGroup(row_group);
     auto row_group_metadata = file_metadata->RowGroup(row_group);
-    
+
     single_row_group[0] = row_group;
-    
+
     // Get individual read ranges for each column - O(columns)
     std::vector<ColumnRangeInfo> column_ranges;
-    column_ranges.reserve(column_indices.size());
-    
+    column_ranges.resize(column_indices.size());
+
     for (size_t c_idx = 0; c_idx < column_indices.size(); c_idx++) {
       single_column[0] = column_indices[c_idx];
-      
+
       auto ranges = parquet_reader->GetReadRanges(
         single_row_group, single_column, 0, 1
       ).ValueOrDie();
-      
-      if (!ranges.empty()) {
-        ColumnRangeInfo info;
-        info.offset = ranges[0].offset;
-        info.length = ranges[0].length;
-        info.column_idx = c_idx;
-        column_ranges.push_back(info);
-      }
+
+      ColumnRangeInfo &info = column_ranges[c_idx];
+      info.offset = ranges[0].offset;
+      info.length = ranges[0].length;
+      info.column_idx = c_idx;
     }
-    
+
     // Sort column ranges by offset for efficient matching - O(columns * log(columns))
     std::sort(column_ranges.begin(), column_ranges.end(),
       [](const ColumnRangeInfo& a, const ColumnRangeInfo& b) {
@@ -297,9 +294,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       });
     
     // Get coalesced read ranges for all columns - O(1)
-    auto coalesced_ranges = parquet_reader->GetReadRanges(
-      single_row_group, column_indices, 0, 1
-    ).ValueOrDie();
+    auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, 0, 1).ValueOrDie();
     
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
