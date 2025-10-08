@@ -95,6 +95,13 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(
     return buffer;
   }
 
+  if (buffer_ != nullptr)
+  {
+    auto msg = std::string("ReadAt failed, because read cannot be serveeed from a buffer, buffer_offset=") + std::to_string(buffer_offset_) 
+          + ", buffer_size=" + std::to_string(buffer_->size()) + ", position_to_read=" + std::to_string(position) + ", nbytes_to_read=" + std::to_string(nbytes) + "!";
+    return arrow::Status::UnknownError(msg);
+  }
+
   ARROW_ASSIGN_OR_RAISE(
     auto buffer, arrow::AllocateResizableBuffer(nbytes)
   );
@@ -284,9 +291,9 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       [](const arrow::io::ReadRange& a, const arrow::io::ReadRange& b) {
         return a.offset < b.offset;
       });
-    
+
     auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, cache_options.hole_size_limit, cache_options.range_size_limit).ValueOrDie();
-    
+
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
     
