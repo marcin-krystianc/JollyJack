@@ -246,8 +246,10 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
   parquet::ParquetFileReader* parquet_reader,
   const std::shared_ptr<parquet::FileMetaData>& file_metadata,
   const std::vector<int>& row_groups,
-  const std::vector<int>& column_indices
-) {
+  const std::vector<int>& column_indices, 
+  const arrow::io::CacheOptions& cache_options
+) 
+{
   std::vector<CoalescedRequest> coalesced_requests;
   int64_t current_target_row = 0;
   
@@ -283,7 +285,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         return a.offset < b.offset;
       });
     
-    auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, 0, 1).ValueOrDie();
+    auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, cache_options.hole_size_limit, cache_options.range_size_limit).ValueOrDie();
     
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
@@ -585,9 +587,7 @@ void ReadIntoMemoryIOUring(
   ResolveColumnIndices(column_indices, column_names, file_metadata);
 
   // Create coalesced requests (fewer I/O operations than columns)
-  auto coalesced_requests = CreateCoalescedRequests(
-    parquet_reader.get(), file_metadata, row_groups, column_indices
-  );
+  auto coalesced_requests = CreateCoalescedRequests(parquet_reader.get(), file_metadata, row_groups, column_indices, cache_options);
 
   // Initialize io_uring
   struct io_uring ring = {};
