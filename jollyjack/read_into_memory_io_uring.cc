@@ -185,144 +185,185 @@ void ReadIntoMemoryIOUring (const std::string& path
       }
   }
     
-  std::vector<Request> requests(column_indices.size());
-  struct io_uring ring = {};
-  unsigned int queue_depth = requests.size();
-
-   // Initialize io_uring
-  int ret = io_uring_queue_init(queue_depth, &ring, 0);
-  if (ret < 0) {
-    auto msg = std::string("Failed to initialize io_uring: ") + strerror(-ret);
-    throw std::logic_error(msg);
-  }
-
+  // Create all requests for all row groups and columns
+  std::vector<Request> requests;
+  requests.reserve(row_groups.size() * column_indices.size());
+  
   std::vector<int> row_groups_for_read_ranges(1);
   std::vector<int> column_indices_for_read_ranges(1);
   int64_t target_row = 0;
-  size_t target_row_ranges_idx = 0;
+  
   for (size_t r_idx = 0; r_idx < row_groups.size(); r_idx++)
   {
-    size_t requestIndex = 0;
     auto row_group = row_groups[r_idx];
     auto row_group_reader = parquet_reader->RowGroup(row_group);
     auto row_group_metadata = file_metadata->RowGroup(row_group);
+    
     for (size_t c_idx = 0; c_idx < column_indices.size(); c_idx++)
     {
-      Request& request = requests[requestIndex++];
+      Request request;
       request.row_group = row_group;
       request.column_counter = c_idx;
       request.column_index = column_indices[c_idx];      
       request.target_row = target_row;
       request.row_group_reader = row_group_reader;
+      
       row_groups_for_read_ranges[0] = request.row_group;
       column_indices_for_read_ranges[0] = request.column_index;
       
       auto const& read_ranges = parquet_reader->GetReadRanges(row_groups_for_read_ranges, column_indices_for_read_ranges, 0, 1).ValueOrDie();
       request.offset = read_ranges[0].offset;
       request.length = read_ranges[0].length;
+      
+      requests.push_back(request);
     }
-
-    for (size_t requestIndex = 0; requestIndex < requests.size(); requestIndex++)
-    {
-      Request& request = requests[requestIndex];
-      struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
-      if (!sqe) {
-        break; // Queue full, try again later
-      }
-
-      // Allocate buffer
-      auto buffer_result = arrow::AllocateBuffer(request.length);
-      if (!buffer_result.ok()) {
-        throw std::logic_error(std::string("Unable to AllocateResizableBuffer: ") + buffer_result.status().message());
-      }
-
-      request.buffer = std::move(buffer_result).ValueOrDie();
-
-      // Prepare read operation
-      io_uring_prep_read(sqe, fd, request.buffer->mutable_data(), 
-                        request.length, request.offset);
-      io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(requestIndex));
-    }
-
-    io_uring_submit(&ring);
-
-    for (size_t request_counter = 0; request_counter < requests.size(); )
-    {
-      struct io_uring_cqe* cqe;
-      int ret = io_uring_wait_cqe_timeout(&ring, &cqe, NULL); 
-      if (ret == -ETIME || ret == -EINTR) {
-        continue;
-      }
-
-      request_counter++;
-
-      if (ret < 0) 
-      {
-        auto msg = std::string("Failed to wait io_uring: ") + strerror(-ret);
-        throw std::logic_error(msg);
-      }
-
-      // Process completion
-      uint64_t requestIndex = reinterpret_cast<uint64_t>(io_uring_cqe_get_data(cqe));
-      Request& request = requests[requestIndex];
-
-      if (cqe->res < 0) {
-        // Error occurred
-        auto msg = std::string("Read failed: ") + strerror(-cqe->res);
-        throw std::logic_error(msg);
-      }
-      else if (cqe->res != request.length) {
-        // Success? - resize buffer to actual bytes read and complete future
-        auto msg = std::string("Read failed? cqe->res != request.length: ") + std::to_string(cqe->res) + " != " + std::to_string(request.length);
-        throw std::logic_error(msg);
-      }
-
-      io_uring_cqe_seen(&ring, cqe);
-
-      fantomReader->SetBuffer(request.offset, request.buffer);
-      auto column_reader = request.row_group_reader->Column(request.column_index);
-
-      auto status = ReadColumn (request.column_counter
-      , request.target_row
-      , column_reader
-      , row_group_metadata.get()
-      , buffer
-      , buffer_size
-      , stride0_size
-      , stride1_size
-      , column_indices
-      , target_column_indices
-      , target_row_ranges
-      , target_row_ranges_idx
-      );
-
-      request.buffer = nullptr;
-
-      if (status != arrow::Status::OK())
-      {
-        throw std::logic_error(status.message());
-      }
-    }
-
+    
     target_row += row_group_metadata->num_rows();
-    if (target_row_ranges.size() > 0)
-    {
-      auto rows = row_group_metadata->num_rows();
-      while (true)
-      {
-        auto range_rows = target_row_ranges[target_row_ranges_idx + 1] - target_row_ranges[target_row_ranges_idx];
-        target_row_ranges_idx += 2;
-        if (rows == range_rows)
-          break;
+  }
 
-        rows -= range_rows;
+  // Initialize io_uring with appropriate queue depth
+  struct io_uring ring = {};
+  unsigned int queue_depth = requests.size();
+
+  int ret = io_uring_queue_init(queue_depth, &ring, 0);
+  if (ret < 0) {
+    auto msg = std::string("Failed to initialize io_uring: ") + strerror(-ret);
+    throw std::logic_error(msg);
+  }
+
+  // Submit all requests to io_uring
+  for (size_t requestIndex = 0; requestIndex < requests.size(); requestIndex++)
+  {
+    Request& request = requests[requestIndex];
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+    if (!sqe) {
+      auto msg = std::string("Failed to get SQE from io_uring");
+      throw std::logic_error(msg);
+    }
+
+    // Allocate buffer
+    auto buffer_result = arrow::AllocateBuffer(request.length);
+    if (!buffer_result.ok()) {
+      throw std::logic_error(std::string("Unable to AllocateResizableBuffer: ") + buffer_result.status().message());
+    }
+
+    request.buffer = std::move(buffer_result).ValueOrDie();
+
+    // Prepare read operation
+    io_uring_prep_read(sqe, fd, request.buffer->mutable_data(), 
+                      request.length, request.offset);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(requestIndex));
+  }
+
+  // Submit all requests at once
+  io_uring_submit(&ring);
+
+  // Process all completions
+  size_t target_row_ranges_idx = 0;
+  for (size_t request_counter = 0; request_counter < requests.size(); )
+  {
+    struct io_uring_cqe* cqe;
+    int ret = io_uring_wait_cqe_timeout(&ring, &cqe, NULL); 
+    if (ret == -ETIME || ret == -EINTR) {
+      continue;
+    }
+
+    request_counter++;
+
+    if (ret < 0) 
+    {
+      auto msg = std::string("Failed to wait io_uring: ") + strerror(-ret);
+      throw std::logic_error(msg);
+    }
+
+    // Process completion
+    uint64_t requestIndex = reinterpret_cast<uint64_t>(io_uring_cqe_get_data(cqe));
+    Request& request = requests[requestIndex];
+
+    if (cqe->res < 0) {
+      auto msg = std::string("Read failed: ") + strerror(-cqe->res);
+      throw std::logic_error(msg);
+    }
+    else if (cqe->res != request.length) {
+      auto msg = std::string("Read failed? cqe->res != request.length: ") + std::to_string(cqe->res) + " != " + std::to_string(request.length);
+      throw std::logic_error(msg);
+    }
+
+    io_uring_cqe_seen(&ring, cqe);
+
+    fantomReader->SetBuffer(request.offset, request.buffer);
+    auto column_reader = request.row_group_reader->Column(request.column_index);
+    
+    // Calculate target_row_ranges_idx based on request
+    size_t temp_target_row_ranges_idx = 0;
+    int64_t temp_target_row = 0;
+    for (size_t r_idx = 0; r_idx < row_groups.size(); r_idx++)
+    {
+      auto rg = row_groups[r_idx];
+      if (rg == request.row_group)
+        break;
+        
+      auto rg_metadata = file_metadata->RowGroup(rg);
+      temp_target_row += rg_metadata->num_rows();
+      
+      if (target_row_ranges.size() > 0)
+      {
+        auto rows = rg_metadata->num_rows();
+        while (rows > 0)
+        {
+          auto range_rows = target_row_ranges[temp_target_row_ranges_idx + 1] - target_row_ranges[temp_target_row_ranges_idx];
+          temp_target_row_ranges_idx += 2;
+          rows -= range_rows;
+        }
       }
+    }
+
+    auto row_group_metadata = file_metadata->RowGroup(request.row_group);
+    auto status = ReadColumn (request.column_counter
+    , request.target_row
+    , column_reader
+    , row_group_metadata.get()
+    , buffer
+    , buffer_size
+    , stride0_size
+    , stride1_size
+    , column_indices
+    , target_column_indices
+    , target_row_ranges
+    , temp_target_row_ranges_idx
+    );
+
+    request.buffer = nullptr;
+
+    if (status != arrow::Status::OK())
+    {
+      throw std::logic_error(status.message());
     }
   }
 
   // Clean up io_uring
   if (ring.ring_fd != 0)
     io_uring_queue_exit(&ring);
+
+  // Validation
+  target_row = 0;
+  target_row_ranges_idx = 0;
+  for (size_t r_idx = 0; r_idx < row_groups.size(); r_idx++)
+  {
+    auto row_group_metadata = file_metadata->RowGroup(row_groups[r_idx]);
+    target_row += row_group_metadata->num_rows();
+    
+    if (target_row_ranges.size() > 0)
+    {
+      auto rows = row_group_metadata->num_rows();
+      while (rows > 0)
+      {
+        auto range_rows = target_row_ranges[target_row_ranges_idx + 1] - target_row_ranges[target_row_ranges_idx];
+        target_row_ranges_idx += 2;
+        rows -= range_rows;
+      }
+    }
+  }
 
   if (target_row_ranges.size() > 0)
   {
@@ -339,6 +380,6 @@ void ReadIntoMemoryIOUring (const std::string& path
       auto msg = std::string("Expected to read ") + std::to_string(expected_rows) + " rows, but read only " + std::to_string(target_row) + "!";
       throw std::logic_error(msg);
     }
-  };
+  }
 }
 
