@@ -310,7 +310,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       size_t start_col_idx = col_idx;
       
       // Scan forward to find all overlapping columns
-      for (size_t i = col_idx; i < column_ranges.size(); i++) {
+      for (size_t i = start_col_idx; i < column_ranges.size(); i++) {
         const auto& col_range = column_ranges[i];
 
         // If this column starts after the coalesced range ends, we're done
