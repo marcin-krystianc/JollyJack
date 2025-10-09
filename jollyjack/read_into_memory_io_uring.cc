@@ -253,6 +253,8 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
   const arrow::io::CacheOptions& cache_options
 ) {
   std::vector<CoalescedRequest> coalesced_requests;
+  coalesced_requests.reserve(column_indices.size() * row_groups.size()); // reserve enough memory to avoid reallocations
+
   int64_t current_target_row = 0;
   
   std::vector<int> single_row_group(1);
@@ -289,14 +291,14 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       });
 
     auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, cache_options.hole_size_limit, cache_options.range_size_limit).ValueOrDie();
-    // coalesced_requests.resize(coalesced_ranges.size());
-
+    
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
     
-    for (auto coalesced_range_idx = 0; coalesced_range_idx < coalesced_ranges.size(); coalesced_range_idx++) {
-      const auto &coalesced_range = coalesced_ranges[coalesced_range_idx];
-      CoalescedRequest request;
+    for (const auto& coalesced_range : coalesced_ranges) {
+      coalesced_requests.emplace_back();
+      CoalescedRequest &request = coalesced_requests[coalesced_requests.size() - 1];
+
       request.offset = coalesced_range.offset;
       request.length = coalesced_range.length;
       request.row_group = row_group;
@@ -332,10 +334,6 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         if (i >= col_idx && col_range.end() <= coalesced_end) {
           col_idx = i + 1;
         }
-      }
-      
-      if (!request.column_reads.empty()) {
-        coalesced_requests.push_back(request);
       }
     }
     
