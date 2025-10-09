@@ -202,13 +202,12 @@ void ResolveColumnIndices(
   column_indices.reserve(column_names.size());
   auto schema = file_metadata->schema();
   
-  for (const auto& column_name : column_names) {
+  for (const auto& column_name : column_names)
+  {
     int column_index = schema->ColumnIndex(column_name);
     
     if (column_index < 0) {
-      throw std::logic_error(
-        "Column '" + column_name + "' was not found!"
-      );
+      throw std::logic_error("Column '" + column_name + "' was not found!");
     }
 
     column_indices.push_back(column_index);
@@ -252,8 +251,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
   const std::vector<int>& row_groups,
   const std::vector<int>& column_indices, 
   const arrow::io::CacheOptions& cache_options
-) 
-{
+) {
   std::vector<CoalescedRequest> coalesced_requests;
   int64_t current_target_row = 0;
   
@@ -291,12 +289,14 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       });
 
     auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, cache_options.hole_size_limit, cache_options.range_size_limit).ValueOrDie();
+    coalesced_requests.resize(coalesced_ranges.size());
 
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
     
-    for (const auto& coalesced_range : coalesced_ranges) {
-      CoalescedRequest request;
+    for (auto coalesced_range_idx = 0; coalesced_range_idx < coalesced_ranges.size(); coalesced_range_idx++) {
+      const auto &coalesced_range = coalesced_ranges[coalesced_range_idx];
+      CoalescedRequest &request = coalesced_requests[coalesced_range_idx];
       request.offset = coalesced_range.offset;
       request.length = coalesced_range.length;
       request.row_group = row_group;
@@ -307,35 +307,24 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       
       // Find all column ranges that overlap with this coalesced range
       // Start from where we left off (columns are sorted)
-      size_t start_col_idx = col_idx;
-      
       // Scan forward to find all overlapping columns
-      for (size_t i = start_col_idx; i < column_ranges.size(); i++) {
-        const auto& col_range = column_ranges[i];
-        
+      for (col_idx; col_idx < column_ranges.size(); col_idx++) {
+        const auto& col_range = column_ranges[col_idx];
+
         // If this column starts after the coalesced range ends, we're done
         if (col_range.offset >= coalesced_end) {
           break;
         }
-        
+
         // Check for overlap
         if (col_range.offset < coalesced_end && 
             col_range.end() > coalesced_range.offset) {
-          
+
           ColumnRead column_read;
           column_read.column_counter = col_range.column_idx;
           column_read.column_index = column_indices[col_range.column_idx];
           request.column_reads.push_back(column_read);
         }
-        
-        // Update col_idx for next iteration
-        if (i >= col_idx && col_range.end() <= coalesced_end) {
-          col_idx = i + 1;
-        }
-      }
-      
-      if (!request.column_reads.empty()) {
-        coalesced_requests.push_back(request);
       }
     }
     
