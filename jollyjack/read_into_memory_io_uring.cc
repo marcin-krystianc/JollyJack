@@ -173,29 +173,20 @@ void ValidateTargetRowRanges(const std::vector<int64_t>& target_row_ranges) {
 }
 
 // Open file and create parquet reader
-std::tuple<int, std::shared_ptr<FantomReader>, 
-           std::unique_ptr<parquet::ParquetFileReader>,
-           std::shared_ptr<parquet::FileMetaData>>
-OpenParquetFile(
-  const std::string& path,
-  std::shared_ptr<parquet::FileMetaData> file_metadata
-) {
+std::tuple<int, std::shared_ptr<FantomReader>, std::unique_ptr<parquet::ParquetFileReader>>
+OpenParquetFile(const std::string& path, std::shared_ptr<parquet::FileMetaData> file_metadata) 
+{
   int fd = open(path.c_str(), O_RDONLY);
-  if (fd < 0) {
-    throw std::logic_error(
-      "Failed to open file: " + path + " - " + strerror(errno)
-    );
+  if (fd < 0) 
+  {
+    throw std::logic_error("Failed to open file: " + path + " - " + strerror(errno));
   }
 
-  parquet::ReaderProperties reader_properties = 
-    parquet::default_reader_properties();
+  parquet::ReaderProperties reader_properties = parquet::default_reader_properties();
   auto fantom_reader = std::make_shared<FantomReader>(fd);
-  auto parquet_reader = parquet::ParquetFileReader::Open(
-    fantom_reader, reader_properties, file_metadata
-  );
-  file_metadata = parquet_reader->metadata();
+  auto parquet_reader = parquet::ParquetFileReader::Open(fantom_reader, reader_properties, file_metadata);
 
-  return {fd, fantom_reader, std::move(parquet_reader), file_metadata};
+  return {fd, fantom_reader, std::move(parquet_reader)};
 }
 
 // Resolve column names to column indices
@@ -594,9 +585,8 @@ void ReadIntoMemoryIOUring(
 {
   ValidateTargetRowRanges(target_row_ranges);
 
-  auto [fd, fantom_reader, parquet_reader, metadata] = 
-    OpenParquetFile(path, file_metadata);
-  file_metadata = metadata;
+  auto [fd, fantom_reader, parquet_reader] = OpenParquetFile(path, file_metadata);
+  file_metadata = parquet_reader->metadata();
 
   ResolveColumnIndices(column_indices, column_names, file_metadata);
 
