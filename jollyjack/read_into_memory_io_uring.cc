@@ -329,7 +329,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         }
       }
     }
-    
+
     current_target_row += row_group_metadata->num_rows();
   }
   
@@ -403,7 +403,7 @@ size_t CalculateTargetRowRangesIndex(
 }
 
 // Process all columns covered by a coalesced request
-void ProcessCoalescedCompletion(
+void ProcessCompletion(
   CoalescedRequest& request,
   const std::shared_ptr<FantomReader>& fantom_reader,
   const std::shared_ptr<parquet::FileMetaData>& file_metadata,
@@ -423,10 +423,7 @@ void ProcessCoalescedCompletion(
   for (const auto& column_read : request.column_reads) 
   {
     auto column_reader = request.row_group_reader->Column(column_read.column_index);
-    
-    size_t target_row_ranges_idx = CalculateTargetRowRangesIndex(
-      request.row_group, row_groups, file_metadata, target_row_ranges
-    );
+    size_t target_row_ranges_idx = CalculateTargetRowRangesIndex(request.row_group, row_groups, file_metadata, target_row_ranges);
 
     auto row_group_metadata = file_metadata->RowGroup(request.row_group);
     auto status = ReadColumn(
@@ -453,7 +450,7 @@ void ProcessCoalescedCompletion(
 }
 
 // Wait for and process all io_uring completions
-void ProcessCoalescedCompletions(
+void ProcessCompletions(
   struct io_uring& ring,
   std::vector<CoalescedRequest>& requests,
   const std::shared_ptr<FantomReader>& fantom_reader,
@@ -486,8 +483,7 @@ void ProcessCoalescedCompletions(
     completed++;
 
     // Extract request index and validate completion
-    size_t request_idx = 
-      reinterpret_cast<size_t>(io_uring_cqe_get_data(cqe));
+    size_t request_idx = reinterpret_cast<size_t>(io_uring_cqe_get_data(cqe));
     CoalescedRequest& request = requests[request_idx];
 
     if (cqe->res < 0) {
@@ -497,15 +493,13 @@ void ProcessCoalescedCompletions(
     }
     
     if (cqe->res != request.length) {
-      throw std::logic_error(
-        "Read failed - incomplete: " + std::to_string(cqe->res) +
-        " != " + std::to_string(request.length)
+      throw std::logic_error("Read failed - incomplete: " + std::to_string(cqe->res) + " != " + std::to_string(request.length)
       );
     }
 
     io_uring_cqe_seen(&ring, cqe);
 
-    ProcessCoalescedCompletion(
+    ProcessCompletion(
       request, fantom_reader, file_metadata, row_groups,
       column_indices, target_row_ranges, target_column_indices,
       buffer, buffer_size, stride0_size, stride1_size
@@ -540,8 +534,7 @@ void ValidateResults(
 
   if (!target_row_ranges.empty()) {
     if (range_idx != target_row_ranges.size()) {
-      throw std::logic_error(
-        "Expected to read " + 
+      throw std::logic_error("Expected to read " + 
         std::to_string(target_row_ranges.size() / 2) +
         " row ranges, but read only " + 
         std::to_string(range_idx / 2) + "!"
@@ -596,16 +589,14 @@ void ReadIntoMemoryIOUring(
   try {
     SubmitCoalescedRequests(ring, coalesced_requests, fd);
 
-    ProcessCoalescedCompletions(
+    ProcessCompletions(
       ring, coalesced_requests, fantom_reader, file_metadata,
       row_groups, column_indices, target_row_ranges,
       target_column_indices, buffer, buffer_size,
       stride0_size, stride1_size
     );
 
-    ValidateResults(
-      row_groups, file_metadata, target_row_ranges, expected_rows
-    );
+    ValidateResults(row_groups, file_metadata, target_row_ranges, expected_rows);
   } catch (...) {
     io_uring_queue_exit(&ring);
     throw;
