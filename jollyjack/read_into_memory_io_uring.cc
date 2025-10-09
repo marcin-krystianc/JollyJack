@@ -324,10 +324,10 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
         if (col_range.offset < coalesced_end && 
             col_range.end() > coalesced_range.offset) {
           
-          ColumnRead column_read;
+          request.column_reads.emplace_back();
+          ColumnRead &column_read = request.column_reads[request.column_reads.size() - 1];
           column_read.column_counter = col_range.column_idx;
           column_read.column_index = column_indices[col_range.column_idx];
-          request.column_reads.push_back(column_read);
         }
         
         // Update col_idx for next iteration
