@@ -289,11 +289,13 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       });
 
     auto coalesced_ranges = parquet_reader->GetReadRanges(single_row_group, column_indices, cache_options.hole_size_limit, cache_options.range_size_limit).ValueOrDie();
-    
+    // coalesced_requests.resize(coalesced_ranges.size());
+
     // Match column ranges to coalesced ranges using two pointers - O(coalesced + columns)
     size_t col_idx = 0;
     
-    for (const auto& coalesced_range : coalesced_ranges) {
+    for (auto coalesced_range_idx = 0; coalesced_range_idx < coalesced_ranges.size(); coalesced_range_idx++) {
+      const auto &coalesced_range = coalesced_ranges[coalesced_range_idx];
       CoalescedRequest request;
       request.offset = coalesced_range.offset;
       request.length = coalesced_range.length;
