@@ -18,6 +18,9 @@
 
 using arrow::Status;
 
+#define IORING_SETUP_SINGLE_ISSUER 4096
+#define IORING_SETUP_DEFER_TASKRUN 8192
+
 class FantomReader : public arrow::io::RandomAccessFile {
  public:
   explicit FantomReader(int fd);
@@ -581,7 +584,7 @@ void ReadIntoMemoryIOUring(
 
   // Initialize io_uring
   struct io_uring ring = {};
-  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, 0);
+  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN);
   if (ret < 0) {
     throw std::logic_error(
       "Failed to initialize io_uring: " + std::string(strerror(-ret))
