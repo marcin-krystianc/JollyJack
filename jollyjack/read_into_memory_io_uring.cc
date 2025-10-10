@@ -372,14 +372,16 @@ void SubmitCoalescedRequests(
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(i));
   }
 
-  //io_uring_submit(&ring);
+  auto submitted = io_uring_submit(&ring);
   
+  /*
   auto start = std::chrono::system_clock::now();
   auto submitted = io_uring_submit(&ring);
 
   auto end = std::chrono::system_clock::now();
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
   std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, submitted=" << std::to_string(submitted) << std::endl;
+*/
   
 }
 
