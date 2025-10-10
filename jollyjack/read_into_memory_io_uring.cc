@@ -372,15 +372,15 @@ void SubmitCoalescedRequests(
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(i));
   }
 
-  io_uring_submit(&ring);
-  /*
+  //io_uring_submit(&ring);
+  
   auto start = std::chrono::system_clock::now();
-  io_uring_submit(&ring);
+  auto submitted = io_uring_submit(&ring);
 
   auto end = std::chrono::system_clock::now();
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-  std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, requests.size():" << std::to_string(requests.size()) << std::endl;
-  */
+  std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, submitted=" << std::to_string(submitted) << std::endl;
+  
 }
 
 // Calculate target_row_ranges_idx for a specific row group
@@ -588,10 +588,11 @@ void ReadIntoMemoryIOUring(
 
   // Create coalesced requests (fewer I/O operations than columns)
   auto coalesced_requests = CreateCoalescedRequests(parquet_reader.get(), file_metadata, row_groups, column_indices, cache_options);
-
+  
+  #define IORING_SETUP_SQPOLL 2
   // Initialize io_uring
   struct io_uring ring = {};
-  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, 0);
+  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, IORING_SETUP_SQPOLL);
   if (ret < 0) {
     throw std::logic_error(
       "Failed to initialize io_uring: " + std::string(strerror(-ret))
