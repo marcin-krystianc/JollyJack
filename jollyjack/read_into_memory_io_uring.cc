@@ -158,6 +158,7 @@ struct CoalescedRequest {
   int64_t offset;
   int64_t length;
   int64_t target_row;
+  std::shared_ptr<parquet::RowGroupMetaData> row_group_metadata;
   std::shared_ptr<parquet::RowGroupReader> row_group_reader;
   std::shared_ptr<arrow::Buffer> buffer;
   std::vector<ColumnRead> column_reads;
@@ -263,7 +264,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
   // Process each row group separately to maintain target_row tracking
   for (int row_group : row_groups) {
     auto row_group_reader = parquet_reader->RowGroup(row_group);
-    auto row_group_metadata = file_metadata->RowGroup(row_group);
+    std::shared_ptr<parquet::RowGroupMetaData> row_group_metadata = file_metadata->RowGroup(row_group);
 
     single_row_group[0] = row_group;
 
@@ -304,6 +305,7 @@ std::vector<CoalescedRequest> CreateCoalescedRequests(
       request.row_group = row_group;
       request.target_row = current_target_row;
       request.row_group_reader = row_group_reader;
+      request.row_group_metadata = row_group_metadata;   
 
       int64_t coalesced_end = coalesced_range.offset + coalesced_range.length;
       
@@ -415,7 +417,9 @@ void ProcessCompletion(
   size_t buffer_size,
   size_t stride0_size,
   size_t stride1_size
-) {
+) {    
+  size_t target_row_ranges_idx = CalculateTargetRowRangesIndex(request.row_group, row_groups, file_metadata, target_row_ranges);
+
   // Set the buffer once for all columns in this request
   fantom_reader->SetBuffer(request.offset, request.buffer);
   
@@ -423,14 +427,12 @@ void ProcessCompletion(
   for (const auto& column_read : request.column_reads) 
   {
     auto column_reader = request.row_group_reader->Column(column_read.column_index);
-    size_t target_row_ranges_idx = CalculateTargetRowRangesIndex(request.row_group, row_groups, file_metadata, target_row_ranges);
 
-    auto row_group_metadata = file_metadata->RowGroup(request.row_group);
     auto status = ReadColumn(
       column_read.column_counter,
       request.target_row,
       column_reader,
-      row_group_metadata.get(), // TODO(marcink - optimize it)
+      request.row_group_metadata.get(), 
       buffer,
       buffer_size,
       stride0_size,
