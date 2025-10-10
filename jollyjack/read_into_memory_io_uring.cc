@@ -89,7 +89,7 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(
   int64_t position, int64_t nbytes
 ) {
   if (buffer_ != nullptr && position >= buffer_offset_ && buffer_offset_ + buffer_->size() >= position + nbytes) {
-    return arrow::SliceBuffer(std::move(buffer_), buffer_offset_ - position, nbytes);
+    return arrow::SliceBuffer(buffer_, position - buffer_offset_, nbytes);
   }
 
   if (buffer_ != nullptr)
@@ -495,7 +495,7 @@ void ProcessCompletions(
     }
     
     if (cqe->res != request.length) {
-      throw std::logic_error("Read failed - incomplete: " + std::to_string(cqe->res) + " != " + std::to_string(request.length)
+        throw std::logic_error("Read failed - incomplete: " + std::to_string(cqe->res) + " != " + std::to_string(request.length)
       );
     }
 
