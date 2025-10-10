@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <chrono>
+#include <iostream>
 
 #if defined(__x86_64__)
   #include <immintrin.h>
@@ -373,7 +375,12 @@ void SubmitCoalescedRequests(
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(i));
   }
 
+  auto start = std::chrono::system_clock::now();
   io_uring_submit(&ring);
+
+  auto end = std::chrono::system_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, requests.size():" << std::to_string(requests.size()) << std::endl;
 }
 
 // Calculate target_row_ranges_idx for a specific row group
