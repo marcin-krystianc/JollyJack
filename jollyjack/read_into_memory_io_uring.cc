@@ -20,9 +20,6 @@
 
 using arrow::Status;
 
-#define IORING_SETUP_SINGLE_ISSUER 4096
-#define IORING_SETUP_DEFER_TASKRUN 8192
-
 class FantomReader : public arrow::io::RandomAccessFile {
  public:
   explicit FantomReader(int fd);
@@ -373,14 +370,18 @@ void SubmitCoalescedRequests(
       request.length, request.offset
     );
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(i));
+
+    io_uring_submit(&ring);
+    /*
+    auto start = std::chrono::system_clock::now();
+    io_uring_submit(&ring);
+
+    auto end = std::chrono::system_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, requests.size():" << std::to_string(requests.size()) << std::endl;
+    */
   }
 
-  auto start = std::chrono::system_clock::now();
-  io_uring_submit(&ring);
-
-  auto end = std::chrono::system_clock::now();
-  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-  std::cerr << " io_uring_submit:" << std::to_string(elapsed.count()) << "ms, requests.size():" << std::to_string(requests.size()) << std::endl;
 }
 
 // Calculate target_row_ranges_idx for a specific row group
@@ -591,7 +592,7 @@ void ReadIntoMemoryIOUring(
 
   // Initialize io_uring
   struct io_uring ring = {};
-  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN);
+  int ret = io_uring_queue_init(coalesced_requests.size(), &ring, 0);
   if (ret < 0) {
     throw std::logic_error(
       "Failed to initialize io_uring: " + std::string(strerror(-ret))
