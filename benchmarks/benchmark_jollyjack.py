@@ -14,12 +14,12 @@ benchmark_mode = os.getenv("JJ_benchmark_mode", "CPU")
 
 if benchmark_mode == "FILE_SYSTEM":    
     # FILE_SYSTEM, unable to fit everything into page cache, no repeats
-    n_files = 10
+    n_files = 12
     n_repeats = 1
 elif benchmark_mode == "CPU":
     # "CPU" -> one file, goes into page cache, many repeats
     n_files = 1
-    n_repeats = 10
+    n_repeats = 12
 else:
     raise RuntimeError(f"Ivalid JJ_benchmark_mode:{benchmark_mode}")
 
@@ -172,14 +172,6 @@ def worker_jollyjack_torch(pre_buffer, dtype, path):
                         , pre_buffer = pre_buffer
                         , use_threads = False)
 
-def worker_fs_read(path, chunk_size = 65_536):
-
-    with open(path, 'rb') as f: # Use 'rb' for binary read for consistent behavior
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-
 def measure_reading(max_workers, worker):
 
     def dummy_worker():
@@ -229,16 +221,12 @@ for compression, dtype in [(None, pa.float32()), ('snappy', pa.float32()), (None
 
     print(f".")
     for n_threads in [1, n_threads]:
-        print(f"`file_read` n_threads:{n_threads}, duration:{measure_reading(n_threads, lambda path:worker_fs_read(path = path))}")
-
-    print(f".")
-    for n_threads in [1, n_threads]:
         for pre_buffer in [False, True]:
             for use_threads in [False, True]:
                 print(f"`ParquetReader.read_row_groups` n_threads:{n_threads}, use_threads:{use_threads}, pre_buffer:{pre_buffer}, dtype:{dtype}, compression={compression}, duration:{measure_reading(n_threads, lambda path:worker_arrow_row_group(use_threads = use_threads, pre_buffer = pre_buffer, path = path))}")
 
     print(f".")
-    for jj_uring in [None] if sys.platform.startswith('win') else [None, 'ReadIntoMemoryIOUring', 'IOUringReader1']:
+    for jj_uring in [None] if sys.platform.startswith('win') else [None, 'ReadIntoMemoryIOUring', 'ReadIntoMemory_benchmark1', 'ReadIntoMemory_benchmark2', 'ReadIntoMemory_benchmark3', 'ReadIntoMemory_benchmark4', 'ReadIntoMemory_benchmark5', 'ReadIntoMemory_benchmark6']:
         if jj_uring is None:
             os.environ.pop("JJ_experimental_io_uring_mode", None)
         else:
