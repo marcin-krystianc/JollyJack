@@ -26,7 +26,7 @@ using arrow::Status;
  */
 class FantomReader : public arrow::io::RandomAccessFile {
  public:
-  explicit FantomReader(int fd);
+  explicit FantomReader(int fd, bool respect_block_size);
   ~FantomReader() override;
 
   arrow::Result<int64_t> ReadAt(
@@ -56,7 +56,7 @@ class FantomReader : public arrow::io::RandomAccessFile {
   int64_t cached_buffer_offset_ = 0;
 };
 
-FantomReader::FantomReader(int fd)
+FantomReader::FantomReader(int fd, bool respect_block_size)
     : fd_(fd), pos_(0), file_size_(0) {
   struct stat file_stats;
   if (fstat(fd_, &file_stats) < 0) {
@@ -64,7 +64,7 @@ FantomReader::FantomReader(int fd)
   }
 
   file_size_ = file_stats.st_size;
-  block_size_ = file_stats.st_blksize;
+  block_size_ = respect_block_size ? file_stats.st_blksize : 1;
 }
 
 FantomReader::~FantomReader() {
@@ -205,7 +205,7 @@ OpenParquetFileForReading(const std::string& file_path, std::shared_ptr<parquet:
   }
 
   parquet::ReaderProperties reader_properties = parquet::default_reader_properties();
-  auto fantom_reader = std::make_shared<FantomReader>(fd);
+  auto fantom_reader = std::make_shared<FantomReader>(fd, flags & O_DIRECT);
   auto parquet_reader = parquet::ParquetFileReader::Open(fantom_reader, reader_properties, metadata);
 
   return {fd, fantom_reader, std::move(parquet_reader)};
@@ -271,12 +271,12 @@ std::vector<ColumnFileRange> GetSortedColumnRanges(
 }
 
 // Match individual column ranges to coalesced read ranges
-void MatchColumnsToCoalescedRanges(
-  std::vector<CoalescedIORequest>& coalesced_requests,
+std::vector<CoalescedIORequest> MatchColumnsToCoalescedRanges(
   const std::vector<ColumnFileRange>& sorted_column_ranges,
   const std::vector<arrow::io::ReadRange>& coalesced_ranges,
   const std::vector<int>& column_indices
 ) {
+  std::vector<CoalescedIORequest> coalesced_requests;
   coalesced_requests.reserve(coalesced_ranges.size());
 
   for (const auto& coalesced_range : coalesced_ranges) {
@@ -308,30 +308,7 @@ void MatchColumnsToCoalescedRanges(
 
     coalesced_requests.push_back(request);
   }
-}
 
-// Create optimized coalesced read requests to minimize I/O operations
-std::vector<CoalescedIORequest> CreateCoalescedIORequests(
-  parquet::ParquetFileReader* parquet_reader,
-  const std::shared_ptr<parquet::FileMetaData>& file_metadata,
-  int row_group_index,
-  const std::vector<int>& column_indices, 
-  const arrow::io::CacheOptions& cache_options
-) {
-  // Get individual column ranges sorted by file offset
-  auto sorted_column_ranges = GetSortedColumnRanges(parquet_reader, row_group_index, column_indices);
-
-  // Get coalesced ranges from Parquet reader
-  std::vector<int> single_row_group = {row_group_index};
-  auto coalesced_ranges = parquet_reader->GetReadRanges(
-    single_row_group, column_indices, 
-    cache_options.hole_size_limit, cache_options.range_size_limit
-  ).ValueOrDie();
-
-  // Match columns to coalesced ranges
-  std::vector<CoalescedIORequest> coalesced_requests;
-  MatchColumnsToCoalescedRanges(coalesced_requests, sorted_column_ranges, coalesced_ranges, column_indices);
-  
   return coalesced_requests;
 }
 
@@ -547,7 +524,7 @@ void ReadIntoMemoryIOUring(
   size_t stride0_size,
   size_t stride1_size,
   std::vector<int> column_indices,
-  const std::vector<int>& target_row_groups,
+  const std::vector<int>& row_groups,
   const std::vector<int64_t>& target_row_ranges,
   const std::vector<std::string>& column_names,
   const std::vector<int>& target_column_indices,
@@ -586,15 +563,43 @@ void ReadIntoMemoryIOUring(
     size_t target_row_ranges_index = 0;
 
     // Process each row group
-    for (int row_group_index : target_row_groups) {
+    for (int row_group_index : row_groups) {
       const auto row_group_reader = parquet_reader->RowGroup(row_group_index);
       const auto row_group_metadata = file_metadata->RowGroup(row_group_index);
       const auto rows_in_group = row_group_metadata->num_rows();
 
+      // Get individual column ranges sorted by file offset
+      auto sorted_column_ranges = GetSortedColumnRanges(parquet_reader.get(), row_group_index, column_indices);
+
+      std::vector<::arrow::io::ReadRange> maybe_coalesced_ranges;
+
+      if (pre_buffer)
+      {
+        // In arrow, read ranges are coalesced only if the pre_buffer is True
+        std::vector<int> single_row_group = {row_group_index};
+        maybe_coalesced_ranges = parquet_reader->GetReadRanges(
+            single_row_group, column_indices, 
+            cache_options.hole_size_limit, cache_options.range_size_limit
+          ).ValueOrDie();
+
+        fantom_reader->WillNeed(maybe_coalesced_ranges);
+      }
+      else
+      {
+        for (auto column_range: sorted_column_ranges)
+        {
+          ::arrow::io::ReadRange read_range = 
+          {
+            .offset = column_range.file_offset,
+            .length = column_range.data_length,
+          };
+
+          maybe_coalesced_ranges.push_back(read_range);
+        }
+      }
+
       // Create coalesced I/O requests to minimize file operations
-      auto coalesced_requests = CreateCoalescedIORequests(
-        parquet_reader.get(), file_metadata, row_group_index, column_indices, cache_options
-      );
+      auto coalesced_requests = MatchColumnsToCoalescedRanges(sorted_column_ranges, maybe_coalesced_ranges, column_indices);
 
       // Submit all I/O requests asynchronously
       SubmitIORequests(ring, coalesced_requests, fd, fantom_reader->GetBlockSize());
