@@ -156,31 +156,29 @@ jj.read_into_torch (source = path
 print(tensor)
 ```
 
-## Benchmarks:
+## Benchmarks: CPU
 
-| n_threads | use_threads | pre_buffer | dtype     | compression | PyArrow   | JollyJack |
-|-----------|-------------|------------|-----------|-------------|-----------|-----------|
-| 1         | False       | False      | float     | None        | **6.79s** | **3.55s** |
-| 1         | True        | False      | float     | None        | **5.17s** | **2.32s** |
-| 1         | False       | True       | float     | None        | **5.54s** | **2.76s** |
-| 1         | True        | True       | float     | None        | **3.98s** | **2.66s** |
-| 2         | False       | False      | float     | None        | **4.63s** | **2.33s** |
-| 2         | True        | False      | float     | None        | **3.89s** | **2.36s** |
-| 2         | False       | True       | float     | None        | **4.19s** | **2.61s** |
-| 2         | True        | True       | float     | None        | **3.36s** | **2.39s** |
-| 1         | False       | False      | float     | snappy      | **7.00s** | **3.56s** |
-| 1         | True        | False      | float     | snappy      | **5.21s** | **2.23s** |
-| 1         | False       | True       | float     | snappy      | **5.22s** | **3.30s** |
-| 1         | True        | True       | float     | snappy      | **3.73s** | **2.84s** |
-| 2         | False       | False      | float     | snappy      | **4.43s** | **2.49s** |
-| 2         | True        | False      | float     | snappy      | **3.40s** | **2.42s** |
-| 2         | False       | True       | float     | snappy      | **4.07s** | **2.63s** |
-| 2         | True        | True       | float     | snappy      | **3.14s** | **2.55s** |
-| 1         | False       | False      | halffloat | None        | **7.21s** | **1.23s** |
-| 1         | True        | False      | halffloat | None        | **3.53s** | **0.71s** |
-| 1         | False       | True       | halffloat | None        | **7.43s** | **1.96s** |
-| 1         | True        | True       | halffloat | None        | **4.04s** | **1.52s** |
-| 2         | False       | False      | halffloat | None        | **3.84s** | **0.64s** |
-| 2         | True        | False      | halffloat | None        | **3.11s** | **0.57s** |
-| 2         | False       | True       | halffloat | None        | **4.07s** | **1.17s** |
-| 2         | True        | True       | halffloat | None        | **3.39s** | **1.14s** |
+| n_threads | use_threads | pre_buffer | dtype     | PyArrow   | JollyJack |
+|-----------|-------------|------------|-----------|-----------|-----------|
+| 1         | False       | False      | float     | **1.43s** | **0.61s** |
+| 1         | True        | False      | float     | **0.90s** | **0.45s** |
+| 1         | False       | True       | float     | **1.71s** | **1.12s** |
+| 1         | True        | True       | float     | **1.21s** | **1.09s** |
+| 1         | False       | False      | halffloat | **1.47s** | **0.60s** |
+| 1         | True        | False      | halffloat | **0.74s** | **0.41s** |
+| 1         | False       | True       | halffloat | **1.68s** | **1.08s** |
+| 1         | True        | True       | halffloat | **1.01s** | **0.94s** |
+
+
+## Benchmarks: FILE
+
+| n_threads | use_threads | pre_buffer | dtype     | PyArrow   | JollyJack |
+|-----------|-------------|------------|-----------|-----------|-----------|
+| 1         | False       | False      | float     | **6.96s** | **6.14s** |
+| 1         | True        | False      | float     | **6.66s** | **5.42s** |
+| 1         | False       | True       | float     | **5.66s** | **5.55s** |
+| 1         | True        | True       | float     | **5.54s** | **5.55s** |
+| 1         | False       | False      | halffloat | **7.38s** | **5.52s** |
+| 1         | True        | False      | halffloat | **5.73s** | **2.98s** |
+| 1         | False       | True       | halffloat | **2.99s** | **2.79s** |
+| 1         | True        | True       | halffloat | **2.78s** | **2.80s** |
