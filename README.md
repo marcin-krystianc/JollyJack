@@ -156,7 +156,7 @@ jj.read_into_torch (source = path
 print(tensor)
 ```
 
-## Benchmarks: CPU
+## Benchmarks: CPU-bound
 
 | n_threads | use_threads | pre_buffer | dtype     | PyArrow   | JollyJack |
 |-----------|-------------|------------|-----------|-----------|-----------|
@@ -170,7 +170,7 @@ print(tensor)
 | 1         | True        | True       | halffloat | **1.01s** | **0.94s** |
 
 
-## Benchmarks: FILE
+## Benchmarks: I/O-bound
 
 | n_threads | use_threads | pre_buffer | dtype     | PyArrow   | JollyJack |
 |-----------|-------------|------------|-----------|-----------|-----------|
