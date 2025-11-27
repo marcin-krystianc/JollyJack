@@ -183,6 +183,7 @@ print(tensor)
 | 1         | False       | True       | halffloat | **3.74s** | **2.79s** |
 | 1         | True        | True       | halffloat | **3.02s** | **2.73s** |
 
+## Benchmarks: I/O-bound
 
 | n_threads | use_threads | pre_buffer | dtype     | PyArrow   | JollyJack | io_uring  |
 |-----------|-------------|------------|-----------|-----------|-----------|-----------|
