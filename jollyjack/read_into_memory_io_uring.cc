@@ -235,27 +235,71 @@ void ResolveColumnNameToIndices(
   }
 }
 
+// TODO(marcink) Ask for making this method public in Arrow
+static constexpr int64_t kMaxDictHeaderSize = 100;
+bool AddWithOverflow(int64_t u, int64_t v, int64_t* out) 
+{
+  *out = u + v;
+  return false;
+};
+::arrow::io::ReadRange ComputeColumnChunkRange(parquet::FileMetaData* file_metadata,
+                                               int64_t source_size, int row_group_index,
+                                               int column_index) {
+
+  std::unique_ptr<parquet::RowGroupMetaData> row_group_metadata =
+      file_metadata->RowGroup(row_group_index);
+  std::unique_ptr<parquet::ColumnChunkMetaData> column_metadata =
+      row_group_metadata->ColumnChunk(column_index);
+
+  int64_t col_start = column_metadata->data_page_offset();
+  if (column_metadata->has_dictionary_page() &&
+      column_metadata->dictionary_page_offset() > 0 &&
+      col_start > column_metadata->dictionary_page_offset()) {
+    col_start = column_metadata->dictionary_page_offset();
+  }
+
+  int64_t col_length = column_metadata->total_compressed_size();
+  int64_t col_end;
+  if (col_start < 0 || col_length < 0) {
+    throw parquet::ParquetException("Invalid column metadata (corrupt file?)");
+  }
+
+  if (AddWithOverflow(col_start, col_length, &col_end) || col_end > source_size) {
+    throw parquet::ParquetException("Invalid column metadata (corrupt file?)");
+  }
+
+  // PARQUET-816 workaround for old files created by older parquet-mr
+  const parquet::ApplicationVersion& version = file_metadata->writer_version();
+  if (version.VersionLt(parquet::ApplicationVersion::PARQUET_816_FIXED_VERSION())) {
+    // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
+    // dictionary page header size in total_compressed_size and total_uncompressed_size
+    // (see IMPALA-694). We add padding to compensate.
+    int64_t bytes_remaining = source_size - col_end;
+    int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
+    col_length += padding;
+  }
+
+  return {col_start, col_length};
+}
+
 // Get column file ranges sorted by offset for efficient coalescing
 std::vector<ColumnFileRange> GetSortedColumnRanges(
-  parquet::ParquetFileReader* parquet_reader,
+  parquet::FileMetaData* file_metadata,
+  int64_t source_size,
   int row_group_index,
   const std::vector<int>& column_indices
 ) {
-  std::vector<int> single_row_group = {row_group_index};
-  std::vector<int> single_column(1);
-
   std::vector<ColumnFileRange> column_ranges;
   column_ranges.reserve(column_indices.size());
 
   // Get individual read ranges for each column
   for (size_t column_array_index = 0; column_array_index < column_indices.size(); column_array_index++) {
-    single_column[0] = column_indices[column_array_index];
 
-    auto ranges = parquet_reader->GetReadRanges(single_row_group, single_column, 0, 1).ValueOrDie();
+    auto read_range = ComputeColumnChunkRange(file_metadata, source_size, row_group_index, column_indices[column_array_index]);
 
     ColumnFileRange range_info;
-    range_info.file_offset = ranges[0].offset;
-    range_info.data_length = ranges[0].length;
+    range_info.file_offset = read_range.offset;
+    range_info.data_length = read_range.length;
     range_info.column_array_index = column_array_index;
     
     column_ranges.push_back(range_info);
@@ -580,7 +624,7 @@ void ReadIntoMemoryIOUring(
       const auto rows_in_group = row_group_metadata->num_rows();
 
       // Get individual column ranges sorted by file offset
-      auto sorted_column_ranges = GetSortedColumnRanges(parquet_reader.get(), row_group_index, column_indices);
+      auto sorted_column_ranges = GetSortedColumnRanges(file_metadata.get(), fantom_reader->GetSize().ValueOrDie(), row_group_index, column_indices);
 
       std::vector<::arrow::io::ReadRange> maybe_coalesced_ranges;
 
