@@ -252,13 +252,11 @@ std::vector<ColumnFileRange> GetSortedColumnRanges(
     single_column[0] = column_indices[column_array_index];
 
     auto ranges = parquet_reader->GetReadRanges(single_row_group, single_column, 0, 1).ValueOrDie();
-
-    ColumnFileRange range_info;
+    column_ranges.emplace_back();
+    ColumnFileRange& range_info = column_ranges.back();
     range_info.file_offset = ranges[0].offset;
     range_info.data_length = ranges[0].length;
     range_info.column_array_index = column_array_index;
-    
-    column_ranges.push_back(range_info);
   }
 
   // Sort by file offset for efficient matching with coalesced ranges
@@ -279,37 +277,29 @@ std::vector<CoalescedIORequest> MatchColumnsToCoalescedRanges(
   std::vector<CoalescedIORequest> coalesced_requests;
   coalesced_requests.reserve(coalesced_ranges.size());
 
+  auto it = sorted_column_ranges.begin();
   for (const auto& coalesced_range : coalesced_ranges) {
-    CoalescedIORequest request;
+    // Construct directly in the vector
+    coalesced_requests.emplace_back();
+    CoalescedIORequest& request = coalesced_requests.back();
     request.file_offset = coalesced_range.offset;
     request.read_length = coalesced_range.length;
-    
     int64_t range_end = coalesced_range.offset + coalesced_range.length;
-    
-    // Find all column ranges that overlap with this coalesced range
-    for (const auto& column_range : sorted_column_ranges) {
-      // Early termination: if column starts after coalesced range ends
-      if (column_range.file_offset >= range_end) {
+
+    // Iterate only through potentially overlapping columns
+    for (; it != sorted_column_ranges.end(); ++it) {
+      if (it->file_offset >= range_end) {
         break;
       }
-
-      // Check for overlap between column range and coalesced range
-      bool ranges_overlap = (column_range.file_offset < range_end && 
-                           column_range.end_offset() > coalesced_range.offset);
-
-      if (ranges_overlap) {
-        ColumnReadOperation column_op;
-        column_op.column_array_index = column_range.column_array_index;
-        column_op.parquet_column_index = column_indices[column_range.column_array_index];
-        
-        request.column_operations.push_back(column_op);
-      }
+      
+      request.column_operations.emplace_back();
+      ColumnReadOperation &column_op = request.column_operations.back();
+      column_op.column_array_index = it->column_array_index;
+      column_op.parquet_column_index = column_indices[it->column_array_index];
     }
-
-    coalesced_requests.push_back(request);
   }
 
-  return coalesced_requests;
+  return std::move(coalesced_requests);
 }
 
 // Submit all coalesced I/O requests to io_uring for parallel execution
@@ -383,7 +373,7 @@ void ProcessSingleIOCompletion(
     auto read_status = ReadColumn(
       column_operation.column_array_index,
       current_target_row,
-      column_operation.column_reader,
+      column_operation.column_reader.get(),
       row_group_metadata, 
       out,
       buffer_size,
@@ -450,7 +440,8 @@ arrow::Status WaitForIOCompletionsAndSetupReaders(
       return arrow::Status::UnknownError(msg);
     }
 
-    completed_request.read_buffer->Resize(completed_request.read_length);
+    bool shrink_to_fit = false;
+    completed_request.read_buffer->Resize(completed_request.read_length, shrink_to_fit);
     fantom_reader->SetBuffer(completed_request.file_offset, completed_request.read_buffer);
 
     // Create column readers for each column in this request
@@ -543,11 +534,13 @@ void ReadIntoMemoryIOUring(
   ValidateRowRangePairs(target_row_ranges);
 
   int flags = O_RDONLY;
+  bool use_direct_mode = false;
   char *env_value = getenv("JJ_EXPERIMENTAL_O_DIRECT");
   int block_size = 0;
   if (env_value)
   {
     flags |= O_DIRECT;
+    use_direct_mode = true;
     block_size = atoi(env_value);
   }
 
@@ -593,11 +586,14 @@ void ReadIntoMemoryIOUring(
             cache_options.hole_size_limit, cache_options.range_size_limit
           ).ValueOrDie();
 
-        fantom_reader->WillNeed(maybe_coalesced_ranges);
+        if (!use_direct_mode)
+        {
+          fantom_reader->WillNeed(maybe_coalesced_ranges);
+        }
       }
       else
       {
-        for (auto column_range: sorted_column_ranges)
+        for (const auto& column_range: sorted_column_ranges)
         {
           ::arrow::io::ReadRange read_range = 
           {
