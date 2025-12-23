@@ -105,17 +105,12 @@ arrow::Result<std::shared_ptr<arrow::Buffer>> FantomReader::ReadAt(int64_t posit
     return arrow::Status::UnknownError(error_message);
   }
 
-  // Allocate buffer for this coalesced request
   // Calculate aligned offset and length using bit hacks
   int64_t align_down_mask = ~(block_size_ - 1);
-  // Mask for checking alignment, or effectively for aligning up with offset
-  // This is not directly used as a mask for 'align up' in the same way as 'align down'
   int64_t aligned_start_offset = position & align_down_mask;
   int64_t original_end_offset = position + nbytes;
-  // Align up for the end offset: (val + align - 1) & ~(align - 1)
   int64_t aligned_end_offset = (original_end_offset + block_size_ - 1) & align_down_mask;
   int64_t aligned_read_length = aligned_end_offset - aligned_start_offset;
-
   int64_t updated_nbytes = nbytes + (position - aligned_start_offset);
 
   // Allocate new buffer and read from file
@@ -317,18 +312,12 @@ void SubmitIORequests(
       throw std::logic_error("Failed to get submission queue entry from io_uring");
     }
 
-    // Allocate buffer for this coalesced request
     // Calculate aligned offset and length using bit hacks
     int64_t align_down_mask = ~(block_size - 1);
-    // Mask for checking alignment, or effectively for aligning up with offset
-    // This is not directly used as a mask for 'align up' in the same way as 'align down'
     int64_t aligned_start_offset = request.file_offset & align_down_mask;
     int64_t original_end_offset = request.file_offset + request.read_length;
-    // Align up for the end offset: (val + align - 1) & ~(align - 1)
     int64_t aligned_end_offset = (original_end_offset + block_size - 1) & align_down_mask;
     int64_t aligned_read_length = aligned_end_offset - aligned_start_offset;
-
-    // allign file offset + bump the read_lengtrh
     request.read_length = request.read_length + request.file_offset - aligned_start_offset;
     request.file_offset = aligned_start_offset;
 
@@ -526,22 +515,20 @@ void ReadIntoMemoryIOUring(
   const std::vector<int64_t>& target_row_ranges,
   const std::vector<std::string>& column_names,
   const std::vector<int>& target_column_indices,
-  bool pre_buffer,  // Currently unused but kept for API compatibility
+  bool pre_buffer,
   bool use_threads,
+  bool use_o_direct,
   int64_t expected_total_rows, 
   arrow::io::CacheOptions cache_options)
 {
   ValidateRowRangePairs(target_row_ranges);
 
   int flags = O_RDONLY;
-  bool use_direct_mode = false;
-  char *env_value = getenv("JJ_EXPERIMENTAL_O_DIRECT");
   int block_size = 0;
-  if (env_value)
+  if (use_o_direct)
   {
     flags |= O_DIRECT;
-    use_direct_mode = true;
-    block_size = atoi(env_value);
+    block_size = 4096;
   }
 
   auto [fd, fantom_reader, parquet_reader] = OpenParquetFileForReading(parquet_file_path, file_metadata, flags, block_size);
@@ -586,7 +573,7 @@ void ReadIntoMemoryIOUring(
             cache_options.hole_size_limit, cache_options.range_size_limit
           ).ValueOrDie();
 
-        if (!use_direct_mode)
+        if (!use_o_direct)
         {
           fantom_reader->WillNeed(maybe_coalesced_ranges);
         }
