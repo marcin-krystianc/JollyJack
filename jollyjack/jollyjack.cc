@@ -655,7 +655,7 @@ std::shared_ptr<arrow::io::RandomAccessFile> GetIOUringReader1(const std::string
 #ifdef WITH_IO_URING
 #include "direct_reader.h"
 std::shared_ptr<arrow::io::RandomAccessFile> GetDirectReader(const std::string& filename)
-{  
+{
    return std::make_shared<DirectReader>(filename, 4096);
 }
 #else
@@ -680,6 +680,7 @@ void ReadIntoMemoryIOUring (const std::string& path
     , const std::vector<int> &target_column_indices
     , bool pre_buffer
     , bool use_threads
+    , bool use_o_direct
     , int64_t expected_rows
     , arrow::io::CacheOptions cache_options)
 {
