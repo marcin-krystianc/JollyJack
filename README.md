@@ -1,26 +1,19 @@
 # JollyJack
 
-JollyJack is a high‑performance Parquet reader designed to load data directly
+JollyJack is a high-performance Parquet reader designed to load data directly
 into NumPy arrays and PyTorch tensors with minimal overhead.
 
 ## Features
 
-- Reading parquet files directly into numpy arrays and torch tensors (fp16, fp32, fp64)
-- Faster and requiring less memory than vanilla PyArrow
+- Load Parquet straight into NumPy arrays or PyTorch tensors (fp16, fp32, fp64, int32, int64)
+- Up to 6× faster and lower memory use than vanilla PyArrow
 - Compatibility with [PalletJack](https://github.com/marcin-krystianc/PalletJack)
-- Support for io_uring and O_DIRECT mode
+- Optional io_uring + O_DIRECT backend for I/O-bound workloads
 
 ## Known limitations
 
 - Data cannot contain null values
-- Destination NumPy arrays and PyTorch tensors must be column‑major (Fortran‑style) 
-
-## Requirements
-
-- pyarrow  ~= 22.0.0
- 
-JollyJack builds on top of PyArrow. While the source package may work with
-newer versions, the prebuilt binary wheels are built and tested against pyarrow 22.x.
+- Destination NumPy arrays and PyTorch tensors must be column-major (Fortran-style) 
 
 ## Selecting a reader backend
 
@@ -34,8 +27,48 @@ together with **O_DIRECT**.
 To enable the alternative backend, set the `JJ_READER_BACKEND` environment
 variable to one of the following values:
 
-- `io_uring`
-- `io_uring_odirect`
+- `io_uring` - Uses io_uring for async I/O with page cache
+- `io_uring_odirect` - Uses io_uring with O_DIRECT (bypasses page cache)
+
+## Performance tuning tips
+
+JollyJack performance is primarily determined by I/O, threading,
+and memory allocation behavior. The optimal configuration depends on whether
+your workload is I/O-bound or memory-/CPU-bound.
+
+### Threading strategy
+
+- JollyJack can be safely called concurrently from multiple threads.
+- Parallel reads usually improve throughput, but oversubscribing threads can cause contention and degraded performance
+
+### Reuse destination arrays
+
+- Reusing NumPy arrays or PyTorch tensors avoids repeated memory allocation.
+- While allocation itself is fast, it can trigger kernel contention and degrade performance
+
+### Large datasets (exceed filesystem cache)
+
+For datasets larger than available page cache, performance is typically I/O-bound.
+
+Recommended configuration:
+
+- `use_threads = True`, `pre_buffer = True`, `JJ_READER_BACKEND = io_uring_odirect`
+
+This combination bypasses the page cache, reduces double buffering and allows deeper I/O queues via io_uring
+
+### Small datasets (fit in filesystem cache)
+
+For datasets that comfortably fit in RAM, performance is typically CPU- or memory-bound.
+
+Recommended configuration is to
+- `use_threads = False`, `pre_buffer = False` and use default reader backend (no io_uring)
+
+## Requirements
+
+- pyarrow  ~= 22.0.0
+ 
+JollyJack builds on top of PyArrow. While the source package may work with
+newer versions, the prebuilt binary wheels are built and tested against pyarrow 22.x.
 
 ##  Installation
 
@@ -176,32 +209,3 @@ jj.read_into_torch (source = path
 
 print(tensor)
 ```
-
-## Benchmarks:
-
-| n_threads | use_threads | pre_buffer | dtype     | compression | PyArrow   | JollyJack |
-|-----------|-------------|------------|-----------|-------------|-----------|-----------|
-| 1         | False       | False      | float     | None        | **6.79s** | **3.55s** |
-| 1         | True        | False      | float     | None        | **5.17s** | **2.32s** |
-| 1         | False       | True       | float     | None        | **5.54s** | **2.76s** |
-| 1         | True        | True       | float     | None        | **3.98s** | **2.66s** |
-| 2         | False       | False      | float     | None        | **4.63s** | **2.33s** |
-| 2         | True        | False      | float     | None        | **3.89s** | **2.36s** |
-| 2         | False       | True       | float     | None        | **4.19s** | **2.61s** |
-| 2         | True        | True       | float     | None        | **3.36s** | **2.39s** |
-| 1         | False       | False      | float     | snappy      | **7.00s** | **3.56s** |
-| 1         | True        | False      | float     | snappy      | **5.21s** | **2.23s** |
-| 1         | False       | True       | float     | snappy      | **5.22s** | **3.30s** |
-| 1         | True        | True       | float     | snappy      | **3.73s** | **2.84s** |
-| 2         | False       | False      | float     | snappy      | **4.43s** | **2.49s** |
-| 2         | True        | False      | float     | snappy      | **3.40s** | **2.42s** |
-| 2         | False       | True       | float     | snappy      | **4.07s** | **2.63s** |
-| 2         | True        | True       | float     | snappy      | **3.14s** | **2.55s** |
-| 1         | False       | False      | halffloat | None        | **7.21s** | **1.23s** |
-| 1         | True        | False      | halffloat | None        | **3.53s** | **0.71s** |
-| 1         | False       | True       | halffloat | None        | **7.43s** | **1.96s** |
-| 1         | True        | True       | halffloat | None        | **4.04s** | **1.52s** |
-| 2         | False       | False      | halffloat | None        | **3.84s** | **0.64s** |
-| 2         | True        | False      | halffloat | None        | **3.11s** | **0.57s** |
-| 2         | False       | True       | halffloat | None        | **4.07s** | **1.17s** |
-| 2         | True        | True       | halffloat | None        | **3.39s** | **1.14s** |
