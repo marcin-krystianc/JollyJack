@@ -109,8 +109,8 @@ setup(
     zip_safe=False,
     ext_modules=extensions,
     project_urls={
-        "Documentation": "https://github.com/marcin-krystianc/JollyJack",
-        "Source": "https://github.com/marcin-krystianc/JollyJack",
+        "Documentation": "https://github.com/G-Research/JollyJack",
+        "Source": "https://github.com/G-Research/JollyJack",
     },
     cmdclass={
         "build_py": GenerateMetadata,  # Use the custom build command

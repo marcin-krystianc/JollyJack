@@ -31,8 +31,8 @@ include = ['jollyjack*']
 "*" = ["*.pxd", "*.h", "*.pyx"]
 
 [project.urls]
-Homepage = "https://github.com/marcin-krystianc/jollyjack"
-Issues = "https://github.com/marcin-krystianc/jollyjack/issues"
+Homepage = "https://github.com/G-Research/jollyjack"
+Issues = "https://github.com/G-Research/jollyjack/issues"
 
 
 ########################### cibuildwheel ###########################

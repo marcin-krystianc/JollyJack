@@ -7,7 +7,7 @@ into NumPy arrays and PyTorch tensors with minimal overhead.
 
 - Load Parquet straight into NumPy arrays or PyTorch tensors (fp16, fp32, fp64, int32, int64)
 - Up to 6× faster and with lower memory use than vanilla PyArrow
-- Compatibility with [PalletJack](https://github.com/marcin-krystianc/PalletJack)
+- Compatibility with [PalletJack](https://github.com/G-Research/PalletJack)
 - Optional io_uring + O_DIRECT backend for I/O-bound workloads
 
 ## Known limitations
