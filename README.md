@@ -65,10 +65,10 @@ Recommended configuration:
 
 ## Requirements
 
-- pyarrow  ~= 22.0.0
- 
+- pyarrow ~= 23.0.0
+
 JollyJack builds on top of PyArrow. While the source package may work with
-newer versions, the prebuilt binary wheels are built and tested against pyarrow 22.x.
+newer versions, the prebuilt binary wheels are built and tested against pyarrow 23.x.
 
 ##  Installation
 
