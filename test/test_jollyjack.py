@@ -1891,7 +1891,7 @@ class TestJollyJack(unittest.TestCase):
                     use_memory_map=use_memory_map,
                 )
             self.assertTrue(
-                f"Unsupprted JJ_READER_BACKEND=foo_bar" in str(context.exception),
+                f"Unsupported JJ_READER_BACKEND=foo_bar" in str(context.exception),
                 context.exception,
             )
             pr.close()
