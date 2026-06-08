@@ -1,6 +1,8 @@
 #include "arrow/status.h"
 #include "arrow/util/parallel.h"
 #include "parquet/column_reader.h"
+#include "parquet/column_page.h"
+#include "parquet/file_reader.h"
 #include "parquet/types.h"
 
 #include "jollyjack.h"
@@ -32,6 +34,7 @@ arrow::Status ReadColumn (int column_index
     , const std::vector<int> &target_column_indices
     , const std::vector<int64_t> &target_row_ranges
     , size_t target_row_ranges_idx
+    , parquet::RowGroupReader *row_group_reader
     )
 {
   std::string column_name;
@@ -180,6 +183,79 @@ arrow::Status ReadColumn (int column_index
             auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('"  + column_name + "') has FIXED_LEN_BYTE_ARRAY data type with size " + std::to_string(column_reader->descr()->type_length()) + 
               ", but the target value size is " + std::to_string(stride0_size) + "!");
             return arrow::Status::UnknownError(msg);
+          }
+
+          // Fast path: for a PLAIN-encoded, required (non-null) flat column read
+          // as a whole chunk, the values in each data page are already a
+          // contiguous block of num_values * type_length bytes. Copy them
+          // straight from the (decompressed) page buffer into the target,
+          // bypassing the per-value FixedLenByteArray pointer materialization in
+          // the decoder. Falls back to ReadBatch for other encodings (e.g.
+          // BYTE_STREAM_SPLIT), nullable/repeated columns, row-range reads, and
+          // the io_uring path (no RowGroupReader available).
+          bool only_plain_values = true;
+          for (const auto encoding : column_chunk_metadata->encodings())
+          {
+            // RLE is only used for definition/repetition levels, which are
+            // absent for a required, flat column.
+            if (encoding != parquet::Encoding::PLAIN && encoding != parquet::Encoding::RLE)
+              only_plain_values = false;
+          }
+
+          if (row_group_reader != nullptr
+              && only_plain_values
+              && target_row_ranges.size() == 0
+              && column_reader->descr()->max_definition_level() == 0
+              && column_reader->descr()->max_repetition_level() == 0)
+          {
+            auto page_reader = row_group_reader->GetColumnPageReader(parquet_column);
+
+            std::shared_ptr<parquet::Page> page;
+            while (values_read < num_rows && (page = page_reader->NextPage()) != nullptr)
+            {
+              if (page->type() != parquet::PageType::DATA_PAGE
+                  && page->type() != parquet::PageType::DATA_PAGE_V2)
+                continue;
+
+              auto data_page = std::static_pointer_cast<parquet::DataPage>(page);
+              if (data_page->encoding() != parquet::Encoding::PLAIN)
+              {
+                auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
+                  + "') has unexpected data page encoding " + parquet::EncodingToString(data_page->encoding())
+                  + " on the FIXED_LEN_BYTE_ARRAY fast path!");
+                return arrow::Status::UnknownError(msg);
+              }
+
+              const int64_t page_values = data_page->num_values();
+              const uint8_t *values_ptr = data_page->data();
+              if (page->type() == parquet::PageType::DATA_PAGE_V2)
+              {
+                auto data_page_v2 = std::static_pointer_cast<parquet::DataPageV2>(page);
+                values_ptr += data_page_v2->repetition_levels_byte_length()
+                            + data_page_v2->definition_levels_byte_length();
+              }
+
+              const int64_t page_bytes = page_values * stride0_size;
+              if (values_ptr + page_bytes > data_page->data() + data_page->size())
+              {
+                auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
+                  + "'): FIXED_LEN_BYTE_ARRAY data page holds fewer value bytes than expected!");
+                return arrow::Status::UnknownError(msg);
+              }
+
+              if (values_read + page_values > num_rows)
+              {
+                auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
+                  + "'): FIXED_LEN_BYTE_ARRAY pages contain more values than the row group has rows!");
+                return arrow::Status::UnknownError(msg);
+              }
+
+              memcpy(&base_ptr[target_offset], values_ptr, page_bytes);
+              target_offset += page_bytes;
+              values_read += page_values;
+            }
+
+            break;
           }
 
           const int64_t warp_size = 1024;
@@ -397,7 +473,8 @@ void ReadIntoMemory (std::shared_ptr<arrow::io::RandomAccessFile> source
                   , column_indices
                   , target_column_indices
                   , target_row_ranges
-                  , target_row_ranges_idx);
+                  , target_row_ranges_idx
+                  , row_group_reader.get());
               }
               catch(const parquet::ParquetException& e)
               {
