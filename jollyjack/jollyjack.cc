@@ -185,28 +185,42 @@ arrow::Status ReadColumn (int column_index
             return arrow::Status::UnknownError(msg);
           }
 
-          // Fast path: for a PLAIN-encoded, required (non-null) flat column read
-          // as a whole chunk, the values in each data page are already a
-          // contiguous block of num_values * type_length bytes. Copy them
-          // straight from the (decompressed) page buffer into the target,
-          // bypassing the per-value FixedLenByteArray pointer materialization in
-          // the decoder. Falls back to ReadBatch for other encodings (e.g.
-          // BYTE_STREAM_SPLIT), nullable/repeated columns, row-range reads, and
-          // the io_uring path (no RowGroupReader available).
+          // Fast path: for a PLAIN-encoded, flat (non-repeated), null-free column
+          // read as a whole chunk, the values in each data page are a contiguous
+          // block of num_values * type_length bytes. Copy them straight from the
+          // (decompressed) page buffer into the target, bypassing the per-value
+          // FixedLenByteArray pointer materialization in the decoder. An optional
+          // column (max_definition_level > 0) qualifies only when the column-chunk
+          // statistics prove it has no nulls; the definition-level section is then
+          // skipped per page. Falls back to ReadBatch for other encodings (e.g.
+          // BYTE_STREAM_SPLIT), nullable/repeated columns, row-range reads, and the
+          // io_uring path (no RowGroupReader available).
+          const int16_t max_def_level = column_reader->descr()->max_definition_level();
+          const int16_t max_rep_level = column_reader->descr()->max_repetition_level();
+
           bool only_plain_values = true;
           for (const auto encoding : column_chunk_metadata->encodings())
           {
-            // RLE is only used for definition/repetition levels, which are
-            // absent for a required, flat column.
+            // RLE is only used for definition/repetition levels.
             if (encoding != parquet::Encoding::PLAIN && encoding != parquet::Encoding::RLE)
               only_plain_values = false;
           }
 
+          // A required column (max_def_level == 0) never has nulls. An optional
+          // one may still contain none; trust the column-chunk statistics.
+          bool no_nulls = true;
+
+          // Definition levels are bit-packed at bit width = bits needed to
+          // represent max_def_level (e.g. 1 for an optional flat column).
+          int def_bit_width = 0;
+          for (int v = max_def_level; v > 0; v >>= 1)
+            def_bit_width++;
+
           if (row_group_reader != nullptr
               && only_plain_values
-              && target_row_ranges.size() == 0
-              && column_reader->descr()->max_definition_level() == 0
-              && column_reader->descr()->max_repetition_level() == 0)
+              && no_nulls
+              && max_rep_level == 0
+              && target_row_ranges.size() == 0)
           {
             auto page_reader = row_group_reader->GetColumnPageReader(parquet_column);
 
@@ -226,17 +240,56 @@ arrow::Status ReadColumn (int column_index
                 return arrow::Status::UnknownError(msg);
               }
 
-              const int64_t page_values = data_page->num_values();
-              const uint8_t *values_ptr = data_page->data();
+              const uint8_t *page_data = data_page->data();
+              const uint8_t *page_end = page_data + data_page->size();
+              const uint8_t *values_ptr = page_data;
+              int64_t page_values = data_page->num_values();
+
               if (page->type() == parquet::PageType::DATA_PAGE_V2)
               {
+                // V2 stores levels uncompressed with explicit byte lengths, and
+                // num_nulls() / num_values() in the header.
                 auto data_page_v2 = std::static_pointer_cast<parquet::DataPageV2>(page);
+                if (data_page_v2->num_nulls() != 0)
+                {
+                  auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
+                    + "'): unexpected null values on the FIXED_LEN_BYTE_ARRAY fast path!");
+                  return arrow::Status::UnknownError(msg);
+                }
                 values_ptr += data_page_v2->repetition_levels_byte_length()
                             + data_page_v2->definition_levels_byte_length();
               }
+              else if (max_def_level > 0)
+              {
+                // V1: skip the definition-level section (no repetition levels,
+                // since max_rep_level == 0). num_values includes the (zero) nulls.
+                const auto def_encoding =
+                    std::static_pointer_cast<parquet::DataPageV1>(page)->definition_level_encoding();
+                if (def_encoding == parquet::Encoding::RLE)
+                {
+                  if (values_ptr + 4 > page_end)
+                    return arrow::Status::UnknownError("Column[" + std::to_string(parquet_column) + "] ('" + column_name + "'): corrupt definition-level section!");
+                  int32_t def_len = 0;
+                  memcpy(&def_len, values_ptr, sizeof(int32_t));  // little-endian length prefix
+                  if (def_len < 0)
+                    return arrow::Status::UnknownError("Column[" + std::to_string(parquet_column) + "] ('" + column_name + "'): invalid definition-level length!");
+                  values_ptr += 4 + def_len;
+                }
+                else if (def_encoding == parquet::Encoding::BIT_PACKED)
+                {
+                  values_ptr += (page_values * def_bit_width + 7) / 8;
+                }
+                else
+                {
+                  auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
+                    + "') has unsupported definition-level encoding " + parquet::EncodingToString(def_encoding)
+                    + " on the FIXED_LEN_BYTE_ARRAY fast path!");
+                  return arrow::Status::UnknownError(msg);
+                }
+              }
 
               const int64_t page_bytes = page_values * stride0_size;
-              if (values_ptr + page_bytes > data_page->data() + data_page->size())
+              if (values_ptr < page_data || values_ptr + page_bytes > page_end)
               {
                 auto msg = std::string("Column[" + std::to_string(parquet_column) + "] ('" + column_name
                   + "'): FIXED_LEN_BYTE_ARRAY data page holds fewer value bytes than expected!");
